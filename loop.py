@@ -106,8 +106,11 @@ def sketch_cold_start(
     # negatives (possible from random projection) are clamped to zero.
     importance = jax.vmap(
         lambda k: JaxTensorSketchStore.query(sketch_state, k, store.d, store.w)
-    )(K)                                      # (t,)
-    importance = jnp.maximum(importance, 0.0)
+    )(K)                                                    # (t,)
+    # Shift so the minimum score is 0, then add a uniform floor of 1.0 so
+    # every token contributes to the range finder (cold_start scales rows by
+    # sqrt(importance), so a 0 score silences that token entirely).
+    importance = importance - jnp.min(importance) + 1.0
 
     return cold_start(
         K, V_mat,
