@@ -46,8 +46,8 @@ class JaxTensorSketchStore:
 
 
     @staticmethod
-    @jax.jit
-    def inner_loop_update(state: SketchState, token_embedding: np.ndarry, d: int, w: int) -> SketchState:
+    @jax.jit(static_argnums=(2, 3))
+    def inner_loop_update(state: SketchState, token_embedding: jnp.ndarray, d: int, w: int) -> SketchState:
         """
             Compiles XLA to be balzing-fast, hardware-native speeds
             Projects a token embedding and returns an updated immutable sketch

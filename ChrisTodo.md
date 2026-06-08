@@ -2,10 +2,10 @@
 
 ## Bug Fixes
 
-### loop.py — broken `inner_loop_update`
-- `np.ndarry` is a typo (`np.ndarray`), and `numpy` is never imported in the file
-- `@staticmethod` and `@jax.jit` are stacked in the wrong order — `@jax.jit` needs to wrap the function before `@staticmethod` takes it, otherwise JAX never sees the raw function
-- `d` and `w` are used inside `reshape()` but JAX traces them as dynamic values, which breaks shape inference — needs `static_argnums=(2, 3)` on the `jit` call
+### ~~loop.py — broken `inner_loop_update`~~ ✅
+- ~~`np.ndarry` is a typo (`np.ndarray`), and `numpy` is never imported in the file~~
+- ~~`@staticmethod` and `@jax.jit` are stacked in the wrong order — `@jax.jit` needs to wrap the function before `@staticmethod` takes it, otherwise JAX never sees the raw function~~
+- ~~`d` and `w` are used inside `reshape()` but JAX traces them as dynamic values, which breaks shape inference — needs `static_argnums=(2, 3)` on the `jit` call~~
 
 ---
 
