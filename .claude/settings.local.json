@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "WebFetch(domain:arxiv.org)",
+      "Bash(python attention.py)",
+      "Bash(python model_hooks.py)",
+      "Bash(python -c ' *)"
+    ]
+  }
+}

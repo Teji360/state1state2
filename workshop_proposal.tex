@@ -1,0 +1,270 @@
+\documentclass{article}
+
+\usepackage[margin=1in,top=0.9in,bottom=0.9in]{geometry}
+\usepackage{amsmath}
+\usepackage{microtype}
+\usepackage{booktabs}
+\usepackage{enumitem}
+\usepackage{titlesec}
+\usepackage{parskip}
+\usepackage{hyperref}
+
+\titlespacing{\section}{0pt}{8pt}{4pt}
+\titlespacing{\subsection}{0pt}{6pt}{2pt}
+
+\setlength{\parskip}{4pt}
+\setlength{\parindent}{0pt}
+
+\title{\textbf{Workshop Proposal: Efficient Memory for Long-Context LLM Inference}\\
+\large NeurIPS 2026 Workshop}
+
+\author{
+  David Aror \quad \texttt{tejirid.aror@gmail.com}\\
+  Independent Research
+  % TODO: add co-organizers before submission
+}
+
+\date{}
+
+\begin{document}
+\maketitle
+
+%% ============================================================
+%% MAIN PROPOSAL (target: <=3 pages)
+%% ============================================================
+
+\section*{1\quad Title and Workshop Description}
+
+\textbf{Title:} \emph{Efficient Memory for Long-Context LLM Inference: Compression, Streaming, and Theoretically-Grounded Methods}
+
+\textbf{Tagline (140 chars):}
+\textit{Where exact guarantees meet practical streaming: online KV-cache compression, low-rank methods, and the next 128K-token frontier.}
+
+\subsection*{Topic and Content}
+
+Autoregressive transformer inference at 32K--128K+ token contexts is bottlenecked
+by the KV cache, which grows linearly in context length and dominates memory for
+deployed models.  A 7B-parameter model requires $\approx$4.7\,GB for the KV cache
+alone at $T{=}8{,}192$ tokens in float32---an amount that scales linearly with
+context.  As production serving shifts toward much longer contexts, KV cache
+management becomes the binding constraint on batch size, GPU utilization, and
+serving cost.
+
+The space of solutions has fragmented rapidly.  \emph{Offline/batch} methods
+(post-sequence SVD, cross-layer factorizations, quantization-aware low-rank
+decomposition) are theoretically well-understood but incompatible with streaming
+generation.  \emph{Online/streaming} methods (Oja's rule, eviction policies,
+sliding windows, attention sinks) are deployment-compatible but often lack
+formal guarantees or achieve compression only at significant quality cost.
+\emph{Hardware-aware} approaches (FlashAttention variants, paged attention,
+speculative decoding with cache reuse) interact with compression in
+underexplored ways.
+
+A critical gap is the absence of a venue where theoreticians who study
+low-rank matrix approximation, practitioners deploying at scale, and
+systems researchers building inference kernels can exchange ideas in real time.
+Recent arXiv activity (OjaKV, SVDq, xKV, KVTC, KQ-SVD, StreamingLLM, SnapKV,
+PyramidKV, MagicPIG) reflects a field that is generating results faster than the
+community can synthesize them.
+
+\textbf{Why now?} Three developments make 2026 the right moment:
+(i) context windows of 128K--1M tokens are now standard in frontier models,
+pushing KV memory from a convenience issue to a hard engineering constraint;
+(ii) a first wave of principled streaming methods (combining randomized linear
+algebra with online updates) has just appeared, and early cross-paper comparison
+shows significant quality variation with no agreed-upon benchmark protocol;
+(iii) hardware vendors are shipping memory-bandwidth-optimized silicon whose
+impact on compression trade-offs is not yet understood.
+Without a coordinating venue, the field risks parallel rediscovery, incompatible
+benchmarking conventions, and missed connections between theory and practice.
+
+\subsection*{Scope and Audiences}
+
+The workshop targets four overlapping communities:
+\begin{itemize}[nosep,leftmargin=1.5em]
+  \item \textbf{Theory/algorithms:} randomized linear algebra, streaming algorithms, online learning, matrix sketching.
+  \item \textbf{ML systems:} inference engines (vLLM, TensorRT-LLM, TGI), XLA/CUDA kernel authors.
+  \item \textbf{LLM practitioners:} fine-tuning, RLHF, long-document QA, multi-turn dialogue, RAG pipelines.
+  \item \textbf{Hardware:} accelerator architects interested in memory-hierarchy trade-offs.
+\end{itemize}
+
+\textbf{Problems we aim to advance:}
+\begin{enumerate}[nosep,leftmargin=1.5em]
+  \item Establish shared benchmarking protocols for online KV compression (reconstruction error, end-task perplexity, latency, memory footprint).
+  \item Identify which theoretical guarantees (EYM optimality, Halko error bounds, Oja convergence) translate meaningfully to downstream task quality.
+  \item Surface open questions at the theory-systems interface: XLA-compilable streaming updates, paged-attention integration, rank adaptation across layers.
+\end{enumerate}
+
+\subsection*{Concurrent Submissions}
+
+The lead organizer has not submitted concurrently related proposals to other venues.
+% TODO: each organizer must verify and complete this statement.
+
+\subsection*{Location Preference}
+
+\begin{enumerate}[nosep,leftmargin=1.5em]
+  \item Sydney
+  \item Atlanta
+  \item Paris
+\end{enumerate}
+
+\subsection*{Invited Speakers}
+
+Organizers will confirm definitive speaker commitments before the proposal
+deadline.  The list below reflects initial outreach; confirmed speakers are
+marked \textbf{(C)}, tentative \textbf{(T)}.
+
+% TODO: fill in confirmed speakers once commitments are received
+\begin{tabular}{lll}
+\toprule
+Speaker & Affiliation & Status \\
+\midrule
+Speaker A: online KV / streaming algorithms & TBD & (T) \\
+Speaker B: randomized linear algebra        & TBD & (T) \\
+Speaker C: ML systems / inference serving   & TBD & (T) \\
+Speaker D: long-context LLM benchmarking    & TBD & (T) \\
+Speaker E: industry practitioner            & TBD & (T) \\
+\bottomrule
+\end{tabular}
+
+We target 4--5 invited speakers with at most 25-minute slots to leave ample time
+for contributed talks, a poster session, and open discussion.
+
+\subsection*{Diversity and Inclusion}
+
+% TODO: complete once co-organizers are confirmed
+The organizing committee will include researchers spanning career stage
+(junior PhD students through senior faculty/industry researchers),
+gender, geographical region (North America, Europe, Asia-Pacific), and
+sector (academia and industry).  We will:
+\begin{itemize}[nosep,leftmargin=1.5em]
+  \item Issue an explicit diversity statement in the call for papers.
+  \item Actively recruit invited speakers from underrepresented groups and regions.
+  \item Apply for NeurIPS social-good travel grants to subsidize attendance for researchers from under-resourced institutions.
+  \item Use double-blind review for contributed papers.
+\end{itemize}
+
+\subsection*{Estimated Attendance}
+
+We estimate 150--300 attendees, based on the intersection of the NeurIPS
+efficient-inference, long-context LLM, and randomized algorithms communities.
+No previous iteration of this specific workshop has been held.
+
+\subsection*{Special Requirements}
+
+A poster session area for 20--30 posters is requested.
+No unusual A/V or compute requirements beyond standard presentation setup.
+
+\subsection*{Differentiation from Related Workshops}
+
+Recent NeurIPS/ICML workshops on efficient transformers (e.g., EfficientML,
+sparsity-focused workshops) have emphasized pruning, quantization, and
+distillation.  KV cache compression, particularly streaming/online methods with
+theoretical guarantees, has not been the primary focus of any recent workshop.
+Our workshop is distinguished by: (i) exclusive focus on memory---not speed,
+sparsity, or model compression broadly; (ii) explicit emphasis on bridging
+theory (randomized NLA, online learning) with practice (inference engines,
+benchmarks); (iii) a live benchmarking session where submitted methods are
+evaluated on a shared held-out protocol announced at submission time.
+
+\subsection*{Workshop Schedule (Proposed)}
+
+\begin{tabular}{ll}
+\toprule
+Time & Session \\
+\midrule
+08:30--09:00 & Opening remarks and problem framing \\
+09:00--11:00 & Invited talks (2 $\times$ 25 min + discussion) \\
+11:00--12:00 & Contributed talks (3 $\times$ 15 min) \\
+12:00--13:30 & Lunch + Poster session \\
+13:30--15:00 & Invited talks (2 $\times$ 25 min + discussion) \\
+15:00--16:00 & Live benchmark reveal and community discussion \\
+16:00--17:00 & Panel: ``What does theory owe practice, and vice versa?'' \\
+17:00--17:30 & Contributed talks (2 $\times$ 12 min) \\
+17:30--18:00 & Open discussion and closing \\
+\bottomrule
+\end{tabular}
+
+Contributed work will be solicited via OpenReview (required per NeurIPS guidelines).
+All accepted submissions will be non-archival; authors may optionally post on arXiv.
+Accept/reject notification will be issued by \textbf{September 29, 2026} at the latest.
+
+%% ============================================================
+%% ORGANIZER INFORMATION (target: <=2 pages)
+%% ============================================================
+
+\newpage
+\section*{Organizer Information}
+
+\subsection*{Organizing Committee}
+
+\textbf{David Aror} \quad \texttt{tejirid.aror@gmail.com} \quad Independent Research
+
+David Aror is an independent researcher working on efficient inference for large
+language models, with a current focus on online KV cache compression using
+exact streaming SVD updates (Brand's rank-1 update) and randomized linear algebra
+(Halko randomized range finder).  His recent work, TKV, is the first online KV
+compression method with a per-token Eckart-Young-Mirsky optimality guarantee.
+He has experience running small research communities and organizing reading groups
+on efficient ML.  He is not submitting any other workshop proposals to NeurIPS 2026.
+
+% TODO: add 2-4 co-organizers with complementary expertise (systems, theory, industry)
+% Format: Name, affiliation, email, paragraph on expertise and organizing experience.
+% Ensure team covers: gender diversity, geographic diversity, career stage diversity.
+% Confirm none are on more than 2 total workshop proposals.
+
+\subsection*{Program Committee}
+
+The PC will be recruited to ensure each submission receives at least 3 reviews and
+no reviewer is assigned more than 3 papers.  We estimate 60--100 submissions
+(based on submission rates at adjacent workshops) and therefore need 60--100
+reviewers.
+
+% TODO: list confirmed PC members with affiliations
+Confirmed PC members (to be updated before submission):
+\begin{itemize}[nosep,leftmargin=1.5em]
+  \item PC Member 1, Affiliation \textbf{(C)}
+  \item PC Member 2, Affiliation \textbf{(C)}
+  \item \ldots\ (target: 60+ members to cover expected submission volume)
+\end{itemize}
+
+Organizers will recuse themselves from reviewing any submission with which they
+have a conflict of interest as defined by the NeurIPS CoI policy.
+Specifically, no organizer will be involved in assessing submissions from their
+own organization.  Conflict detection will use OpenReview's built-in CoI tooling.
+
+Workshop organizers will not submit papers to this workshop (per NeurIPS policy).
+
+%% ============================================================
+\bibliographystyle{plain}
+\begin{thebibliography}{9}
+
+\bibitem{ojakov2025}
+Anonymous.
+OjaKV: Online KV cache compression via Oja's rule.
+arXiv:2509.21623, 2025.
+
+\bibitem{halko2011}
+N.~Halko, P.-G.~Martinsson, J.~A.~Tropp.
+Finding structure with randomness.
+\emph{SIAM Review}, 53(2):217--288, 2011.
+
+\bibitem{brand2006}
+M.~Brand.
+Fast low-rank modifications of the thin SVD.
+\emph{Linear Algebra and its Applications}, 415(1):20--30, 2006.
+
+\bibitem{streamingllm2023}
+G.~Xiao et al.
+Efficient streaming language models with attention sinks.
+arXiv:2309.17453, 2023.
+
+\bibitem{svdq2025}
+Anonymous. SVDq. arXiv:2502.15304, 2025.
+
+\bibitem{xkv2025}
+Anonymous. xKV. arXiv:2503.18893, 2025.
+
+\end{thebibliography}
+
+\end{document}
