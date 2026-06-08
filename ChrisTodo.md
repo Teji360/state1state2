@@ -21,8 +21,8 @@
 
 ## Missing Plots
 
-### Metric 10 — `benchmark_sinked` has no plot
-Every other benchmark in `benchmark.py` saves a PDF. `benchmark_sinked` (Metric 10) is called in `__main__` with only `print_sinked_table` — no `plot_sinked()` function exists. Needs a plot comparing frozen-only vs sinked reconstruction error and attention quality across sequence lengths.
+### ~~Metric 10 — `benchmark_sinked` has no plot~~ ✅
+~~Every other benchmark in `benchmark.py` saves a PDF. `benchmark_sinked` (Metric 10) is called in `__main__` with only `print_sinked_table` — no `plot_sinked()` function exists. Needs a plot comparing frozen-only vs sinked reconstruction error and attention quality across sequence lengths.~~
 
 ---
 

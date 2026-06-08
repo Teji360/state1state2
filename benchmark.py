@@ -1164,6 +1164,34 @@ def print_sinked_table(results, seq_lens):
         )
 
 
+def plot_sinked(results, seq_lens, path="benchmark_sinked.pdf"):
+    fig, axes = plt.subplots(1, 2, figsize=(10, 4))
+
+    ax = axes[0]
+    ax.plot(seq_lens, [results[t]["err_frozen_total"] for t in seq_lens],
+            marker="o", label="frozen only")
+    ax.plot(seq_lens, [results[t]["err_sinked_total"] for t in seq_lens],
+            marker="s", linestyle="--", label="sinked (ours)")
+    ax.set_xlabel("Sequence Length")
+    ax.set_ylabel("Relative Frobenius Error")
+    ax.set_title("Total Reconstruction Error: Frozen vs Sinked")
+    ax.set_yscale("log")
+    ax.legend()
+
+    ax = axes[1]
+    ax.plot(seq_lens, [results[t]["attn_err_vs_frozen"] for t in seq_lens],
+            marker="^", color="tomato")
+    ax.set_xlabel("Sequence Length")
+    ax.set_ylabel("Relative Attention Output Error")
+    ax.set_title("Sinked Attention Quality vs Frozen Basis")
+    ax.set_yscale("log")
+
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+    print(f"Saved {path}")
+
+
 # ---------------------------------------------------------------------------
 # Run all benchmarks
 # ---------------------------------------------------------------------------
@@ -1296,6 +1324,7 @@ if __name__ == "__main__":
         sink_len=64, window_len=64, warmup_len=512, d=D,
     )
     print_sinked_table(sinked_results, (256, 1_000, 4_000))
+    plot_sinked(sinked_results, (256, 1_000, 4_000))
 
     print()
     print("All benchmarks complete.")
