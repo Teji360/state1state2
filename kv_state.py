@@ -576,6 +576,62 @@ def sinked_cold_start(
     )
 
 
+def sinked_add_token(
+    state: SinkedKVState,
+    k_new: jnp.ndarray,  # (d,)
+    v_new: jnp.ndarray,  # (d,)
+    rank: int,
+    window_capacity: int,
+) -> SinkedKVState:
+    """
+    Stream one new token into a SinkedKVState.
+
+    Sink tokens are fixed. While the recent window has fewer than window_capacity
+    tokens, the new token is appended directly. Once the window is full, the
+    oldest recent token is evicted to the frozen-basis middle (initialising it
+    on the first eviction) and the new token takes its place at the end.
+
+    rank is only used when the middle is None and must be initialised from a
+    single evicted token — subsequent additions use frozen_add_token, which is O(R·d).
+    """
+    k_np = np.array(k_new)
+    v_np = np.array(v_new)
+
+    if len(state.recent_k) < window_capacity:
+        return SinkedKVState(
+            sink_k=state.sink_k,
+            sink_v=state.sink_v,
+            middle=state.middle,
+            recent_k=np.vstack([state.recent_k, k_np[None, :]]),
+            recent_v=np.vstack([state.recent_v, v_np[None, :]]),
+            sink_len=state.sink_len,
+            window_len=state.window_len + 1,
+            seq_len=state.seq_len + 1,
+            d=state.d,
+        )
+
+    # Window is full — evict the oldest recent token to the compressed middle
+    evicted_k = jnp.array(state.recent_k[0])
+    evicted_v = jnp.array(state.recent_v[0])
+
+    if state.middle is None:
+        middle = frozen_cold_start(evicted_k[None, :], evicted_v[None, :], rank)
+    else:
+        middle = frozen_add_token(state.middle, evicted_k, evicted_v)
+
+    return SinkedKVState(
+        sink_k=state.sink_k,
+        sink_v=state.sink_v,
+        middle=middle,
+        recent_k=np.vstack([state.recent_k[1:], k_np[None, :]]),
+        recent_v=np.vstack([state.recent_v[1:], v_np[None, :]]),
+        sink_len=state.sink_len,
+        window_len=state.window_len,
+        seq_len=state.seq_len + 1,
+        d=state.d,
+    )
+
+
 # --- Unit test ---
 if __name__ == "__main__":
     T_MAX, R_MAX, D, N = 256, 16, 64, 64

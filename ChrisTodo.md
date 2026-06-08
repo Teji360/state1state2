@@ -11,8 +11,8 @@
 
 ## Incomplete Implementations
 
-### `sinked_add_token()` missing from kv_state.py
-Every other state type has an incremental append function (`append_token`, `append_token_lazy`, `frozen_add_token`), but `SinkedKVState` only has the batch `sinked_cold_start`. The streaming/autoregressive path for the sinked variant doesn't exist. Implement `sinked_add_token(state, k_new, v_new)` that routes the new token into the recent window and handles eviction of old recent tokens into the frozen middle.
+### ~~`sinked_add_token()` missing from kv_state.py~~ ✅
+~~Every other state type has an incremental append function (`append_token`, `append_token_lazy`, `frozen_add_token`), but `SinkedKVState` only has the batch `sinked_cold_start`. The streaming/autoregressive path for the sinked variant doesn't exist. Implement `sinked_add_token(state, k_new, v_new)` that routes the new token into the recent window and handles eviction of old recent tokens into the frozen middle.~~
 
 ### `JaxTensorSketchStore.query()` missing from loop.py
 The README describes the count-min sketch as a maintained layer, and the class has `init_state()` and `inner_loop_update()` but no way to query it. The standard count-min query is a pointwise min across hash rows — the class is half-built without it.
