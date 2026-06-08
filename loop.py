@@ -55,3 +55,22 @@ class JaxTensorSketchStore:
         flat_projection = state.Phi @ token_embedding
         new_S = state.S + flat_projection.reshape((d, w))
         return state._replace(S=new_S)
+
+    @staticmethod
+    @jax.jit(static_argnums=(2, 3))
+    def query(state: SketchState, q: jnp.ndarray, d: int, w: int) -> jnp.ndarray:
+        """
+        Count-min inner-product query for embedding q.
+
+        S[i, j] = sum over all seen tokens x of (Phi[i*w+j] · x), so the inner
+        product (Phi_i @ q) · S[i] estimates sum_t(q · x_t) for each row i.
+        Taking the minimum across rows gives the count-min estimate — each row
+        provides an independent unbiased overestimate, and the minimum reduces
+        the variance while preserving the lower-bound guarantee.
+
+        Returns a scalar: estimated aggregate similarity of q to the token stream.
+        """
+        flat_proj = state.Phi @ q                        # (d*w,)
+        proj = flat_proj.reshape((d, w))                 # (d, w) — q projected per row
+        row_estimates = jnp.sum(proj * state.S, axis=1)  # (d,)   — inner product per row
+        return jnp.min(row_estimates)                    # count-min: minimum over rows
