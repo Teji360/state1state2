@@ -74,3 +74,46 @@ class JaxTensorSketchStore:
         proj = flat_proj.reshape((d, w))                 # (d, w) — q projected per row
         row_estimates = jnp.sum(proj * state.S, axis=1)  # (d,)   — inner product per row
         return jnp.min(row_estimates)                    # count-min: minimum over rows
+
+
+def sketch_cold_start(
+    K: jnp.ndarray,
+    V_mat: jnp.ndarray,
+    store: JaxTensorSketchStore,
+    sketch_state: SketchState,
+    R_max: int,
+    T_max: int,
+) -> "CompressedKVState":
+    """
+    Sketch-driven cold start: the core theoretical bridge for the paper.
+
+    The same Phi matrix that drives the count-min frequency sketch is reused
+    as the Halko randomized SVD sketch (Omega), so both compression schemes
+    share a single random projection.  Importance weights are derived by
+    querying each token's key vector against the accumulated sketch — tokens
+    whose keys align with the seen distribution score higher and bias the SVD
+    to retain their singular directions.
+
+    Requires store.d * store.w >= R_max so Phi has enough rows for the
+    randomized range finder to span an R_max-dimensional subspace.
+    """
+    from kv_state import cold_start
+
+    t, d = K.shape
+
+    # Query every key vector against the sketch in one vectorised pass.
+    # Each score estimates aggregate similarity of that token to the stream;
+    # negatives (possible from random projection) are clamped to zero.
+    importance = jax.vmap(
+        lambda k: JaxTensorSketchStore.query(sketch_state, k, store.d, store.w)
+    )(K)                                      # (t,)
+    importance = jnp.maximum(importance, 0.0)
+
+    return cold_start(
+        K, V_mat,
+        phi=store.Phi_init,
+        R_max=R_max,
+        T_max=T_max,
+        d=d,
+        importance_weights=importance,
+    )

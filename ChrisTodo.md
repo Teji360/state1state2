@@ -28,5 +28,5 @@
 
 ## Research Task
 
-### Wire the count-min sketch into the KV state (core paper contribution)
-The README and Plan.md both call out connecting the sketch to the KV cache as the central theoretical bridge — "Phi rows as the random sketch Omega for SVD connects the count-min sketch to optimal low-rank approximation." `sketch_to_range_basis()` in `loop.py` hints at this but it's never called from `cold_start()` or any attention path. This is the piece that ties `JaxTensorSketchStore` to `kv_state.py`.
+### ~~Wire the count-min sketch into the KV state (core paper contribution)~~ ✅
+~~The README and Plan.md both call out connecting the sketch to the KV cache as the central theoretical bridge — "Phi rows as the random sketch Omega for SVD connects the count-min sketch to optimal low-rank approximation." `sketch_to_range_basis()` in `loop.py` hints at this but it's never called from `cold_start()` or any attention path. This is the piece that ties `JaxTensorSketchStore` to `kv_state.py`.~~
