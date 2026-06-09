@@ -27,7 +27,7 @@ from model_hooks import (
 
 def load_wikitext2(n_tokens: int = 50000, split: str = "test") -> str:
     """Load WikiText-2 test set and return a single concatenated string."""
-    ds = load_dataset("wikitext", "wikitext-2-raw-v1", split=split)
+    ds = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split=split)
     text = "\n\n".join(t for t in ds["text"] if t.strip())
     return text[:n_tokens * 5]  # rough over-estimate, tokenizer will trim
 

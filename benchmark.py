@@ -49,7 +49,7 @@ def extract_real_kv(max_seq_len: int = 512, layer_idx: int = 6, head_idx: int = 
 
     model, tok = load_gpt2()
 
-    ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+    ds = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split="test")
     text = " ".join(t for t in ds["text"] if t.strip())
     ids = tok.encode(text, return_tensors="pt")[:, :max_seq_len]
 
@@ -301,7 +301,7 @@ def benchmark_wikitext_perplexity(
     )
 
     print("Loading WikiText-2 test set...")
-    ds = load_dataset("wikitext", "wikitext-2-raw-v1", split="test")
+    ds = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split="test")
     text = "\n\n".join(t for t in ds["text"] if t.strip())
 
     print("Loading GPT-2...")

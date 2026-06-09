@@ -305,6 +305,74 @@ def patch_gpt2_for_compression(
     return original_impl
 
 
+def _make_sketch_attn_fn(rank: int, T_max: int, sketch_depth: int = 4):
+    """
+    Attention hook using sketch_cold_start: builds a count-min sketch from each
+    head's key vectors, derives importance weights via query(), then calls
+    sketch_cold_start so the same Phi drives both the sketch and the Halko SVD.
+    """
+    from loop import JaxTensorSketchStore, sketch_cold_start
+
+    def _sketch_attn(
+        module,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        attention_mask=None,
+        scaling=None,
+        dropout: float = 0.0,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, None]:
+        batch, n_heads, _, head_dim = key.shape
+        device = query.device
+
+        out_heads = []
+        for b in range(batch):
+            out_batch = []
+            for h in range(n_heads):
+                k_h = torch_to_jax(key[b, h])
+                v_h = torch_to_jax(value[b, h])
+                q_h = torch_to_jax(query[b, h])
+
+                store = JaxTensorSketchStore(
+                    depth=sketch_depth, width=max(rank, 1), embedding_dim=head_dim
+                )
+                sketch_state = store.init_state()
+                for i in range(k_h.shape[0]):
+                    sketch_state = JaxTensorSketchStore.inner_loop_update(
+                        sketch_state, k_h[i], store.d, store.w
+                    )
+
+                state = sketch_cold_start(k_h, v_h, store, sketch_state, rank, T_max)
+                out_h, _ = compressed_attention_with_weights(q_h, state, T_max, causal=True)
+                out_batch.append(jax_to_torch(out_h, device))
+
+            out_heads.append(torch.stack(out_batch, dim=0))
+
+        return torch.stack(out_heads, dim=0).transpose(1, 2), None
+
+    return _sketch_attn
+
+
+def patch_gpt2_sketch(
+    model, rank: int, T_max: int, sketch_depth: int = 4
+) -> str:
+    """
+    Registers sketch-driven compressed attention and activates it for model.
+    Uses the same Phi matrix for both count-min importance scoring and the
+    Halko randomized SVD — the core paper contribution.
+    Returns original _attn_implementation for restoration.
+    """
+    from transformers.models.gpt2.modeling_gpt2 import ALL_ATTENTION_FUNCTIONS
+
+    ALL_ATTENTION_FUNCTIONS.register(
+        "sketch_compressed", _make_sketch_attn_fn(rank, T_max, sketch_depth)
+    )
+    original_impl = model.config._attn_implementation
+    model.config._attn_implementation = "sketch_compressed"
+    return original_impl
+
+
 def unpatch_gpt2(model, original_impl: str) -> None:
     model.config._attn_implementation = original_impl
 
