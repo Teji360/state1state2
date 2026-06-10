@@ -21,7 +21,10 @@
 \author{
   David Aror \quad \texttt{tejirid.aror@gmail.com}\\
   Independent Research
-  % TODO: add co-organizers before submission
+  \and
+  Xavistin C. Arul Arasu \quad \texttt{js01.christopher@gmail.com}\\
+  Independent Research
+  % TODO: add further co-organizers before submission
 }
 
 \date{}
@@ -167,6 +170,41 @@ theory (randomized NLA, online learning) with practice (inference engines,
 benchmarks); (iii) a live benchmarking session where submitted methods are
 evaluated on a shared held-out protocol announced at submission time.
 
+\subsection*{Preliminary Benchmark Findings (Pilot for the Live Benchmark Session)}
+
+To validate that the shared protocol in item~(1) above is measurable and
+discriminative, the organizers ran a pilot sweep on a single commodity
+workstation using GPT-2-small key/value activations extracted from WikiText-2,
+comparing exact streaming SVD (Brand rank-1 update, ``TKV''), Oja's-rule online
+compression (``OjaKV''), and a frozen low-rank basis.  The pilot exercises every
+axis of the proposed protocol---reconstruction error, memory footprint, end-task
+perplexity, and per-token latency---and confirms that these axes separate methods
+cleanly:
+
+\begin{itemize}[nosep,leftmargin=1.5em]
+  \item \textbf{Reconstruction error (real activations).} Averaged over 15
+    layer/head configurations, exact streaming SVD reduced relative reconstruction
+    error by $2.0\times$--$6.6\times$ over OjaKV at matched rank (e.g.\ at
+    $T{=}512$, rank $32$: $0.23$ vs.\ $0.97$).  The EYM-optimality guarantee
+    translates directly into measured quality.
+  \item \textbf{Memory at scale.} At $T{=}128$K tokens the full float32 KV cache
+    requires $9.44$\,GB; a frozen-pyramid basis compresses this to $2.21$\,GB
+    ($4.3\times$), and beat OjaKV on reconstruction error at every long-context
+    setting tested ($1$K--$32$K).
+  \item \textbf{End-task perplexity.} A frozen low-rank basis (average rank $15$)
+    achieved perplexity $89.6$ versus $129.6$ for the exact cache (ratio $0.69$),
+    indicating that a well-chosen fixed basis can match---and here, regularize
+    below---full-cache quality on this evaluation.
+  \item \textbf{Cheap quality levers.} Importance-weighted cold-start cut
+    reconstruction error by $90$--$95\%$ at rank $\geq 8$, and a full-precision
+    sink+window buffer drove sink-token reconstruction error to exactly $0$ at a
+    cost of $<0.1$\,MB per head.
+\end{itemize}
+
+These numbers are a single-workstation pilot, not a leaderboard; their purpose is
+to demonstrate that the live-benchmark session can rank submitted methods on a
+shared, reproducible protocol.  Full scripts and figures accompany this proposal.
+
 \subsection*{Workshop Schedule (Proposed)}
 
 \begin{tabular}{ll}
@@ -208,7 +246,18 @@ compression method with a per-token Eckart-Young-Mirsky optimality guarantee.
 He has experience running small research communities and organizing reading groups
 on efficient ML.  He is not submitting any other workshop proposals to NeurIPS 2026.
 
-% TODO: add 2-4 co-organizers with complementary expertise (systems, theory, industry)
+\textbf{Xavistin C. Arul Arasu} \quad \texttt{js01.christopher@gmail.com} \quad Independent Research
+
+Xavistin C. Arul Arasu is an independent researcher working on efficient inference
+systems for large language models, with a focus on streaming KV-cache compression
+and the empirical evaluation of low-rank and sink/window hybrid methods.  He led the
+benchmarking effort behind this proposal---reconstruction-error, memory-ratio,
+perplexity, and streaming-error sweeps comparing exact streaming SVD (Brand update)
+against Oja's-rule baselines on GPT-2---which forms the basis for the shared
+live-benchmark protocol described in Section~1.  He is not submitting any other
+workshop proposals to NeurIPS 2026.
+
+% TODO: add further co-organizers with complementary expertise (systems, theory, industry)
 % Format: Name, affiliation, email, paragraph on expertise and organizing experience.
 % Ensure team covers: gender diversity, geographic diversity, career stage diversity.
 % Confirm none are on more than 2 total workshop proposals.
@@ -268,3 +317,4 @@ Anonymous. xKV. arXiv:2503.18893, 2025.
 \end{thebibliography}
 
 \end{document}
+

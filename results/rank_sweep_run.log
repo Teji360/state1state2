@@ -1,0 +1,46 @@
+
+============================================================
+Model: GPT-2 (117M)
+============================================================
+Loading WikiText-2...
+Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
+Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
+
+  ctx_len = 128
+Token indices sequence length is longer than the specified maximum sequence length for this model (67622 > 1024). Running this sequence through the model will result in indexing errors
+    exact:    62.58
+    rank= 4:  473.41  (ratio 7.565x)
+    rank= 8:  219.31  (ratio 3.504x)
+    rank=16:  81.98  (ratio 1.310x)
+    rank=32:  59.03  (ratio 0.943x)
+    rank=48:  61.46  (ratio 0.982x)
+
+  ctx_len = 512
+    exact:    26.93
+    rank= 4:  4439.97  (ratio 164.873x)
+    rank= 8:  834.34  (ratio 30.982x)
+    rank=16:  233.13  (ratio 8.657x)
+    rank=32:  31.67  (ratio 1.176x)
+    rank=48:  26.87  (ratio 0.998x)
+
+  ctx_len = 1024
+    exact:    20.34
+    rank= 4:  12720.93  (ratio 625.353x)
+    rank= 8:  1747.71  (ratio 85.917x)
+    rank=16:  605.17  (ratio 29.750x)
+    rank=32:  43.54  (ratio 2.140x)
+    rank=48:  21.44  (ratio 1.054x)
+
+======================================================================
+Perplexity ratio (compressed / exact) — lower is better, 1.00 = lossless
+======================================================================
+ rank  GPT-2@128  GPT-2@512  GPT-2@1024
+---------------------------------------
+    4      7.565    164.873    625.353
+    8      3.504     30.982     85.917
+   16      1.310      8.657     29.750
+   32      0.943      1.176      2.140
+   48      0.982      0.998      1.054
+======================================================================
+
+Saved rank_sweep.pdf
