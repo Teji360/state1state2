@@ -411,6 +411,33 @@ def brand_to_frozen(brand_state: CompressedKVState) -> "FrozenBasisState":
     )
 
 
+def init_frozen_streaming(
+    brand_state: CompressedKVState,
+    T_max: int,
+) -> FrozenBasisState:
+    """
+    Convert a Brand warmup state into a pre-allocated FrozenBasisState.
+
+    Pre-allocates (T_max, R) numpy buffers so frozen_add_token can write
+    in-place (O(R·d) per token, no copy). Use after Brand warmup to get
+    a fixed basis, then call frozen_add_token for all decode tokens.
+    """
+    T = int(brand_state.seq_len)
+    R = int(brand_state.active_rank)
+    proj_k = np.zeros((T_max, R), dtype=np.float32)
+    proj_v = np.zeros((T_max, R), dtype=np.float32)
+    proj_k[:T] = np.array(brand_state.U_k[:T, :R] * brand_state.sigma_k[:R])
+    proj_v[:T] = np.array(brand_state.U_v[:T, :R] * brand_state.sigma_v[:R])
+    return FrozenBasisState(
+        basis_k=brand_state.V_k[:R],
+        basis_v=brand_state.V_v[:R],
+        proj_k=proj_k,
+        proj_v=proj_v,
+        seq_len=T,
+        rank=R,
+    )
+
+
 def hybrid_append_token(
     state,                       # CompressedKVState (warmup) or FrozenBasisState (streaming)
     k_new: jnp.ndarray,          # (d,)
@@ -489,16 +516,23 @@ def frozen_add_token(
     Project a new token onto the frozen basis. O(R * d) per token.
     Basis never changes — no stale projection problem.
 
-    Note: np.vstack copies the full (T, R) array; pre-allocate for production.
+    When state was created by init_frozen_streaming (proj_k pre-allocated with
+    extra capacity), writes in-place — no array copy. Falls back to np.vstack
+    for tight-fit states from frozen_cold_start / brand_to_frozen.
     """
     c_k = np.array(k_new @ state.basis_k.T)[None, :]  # (1, R)
     c_v = np.array(v_new @ state.basis_v.T)[None, :]  # (1, R)
+    t = state.seq_len
+    if state.proj_k.shape[0] > t:
+        state.proj_k[t] = c_k
+        state.proj_v[t] = c_v
+        return state._replace(seq_len=t + 1)
     return FrozenBasisState(
         basis_k=state.basis_k,
         basis_v=state.basis_v,
         proj_k=np.vstack([state.proj_k, c_k]),
         proj_v=np.vstack([state.proj_v, c_v]),
-        seq_len=state.seq_len + 1,
+        seq_len=t + 1,
         rank=state.rank,
     )
 

@@ -23,7 +23,7 @@ from kv_state import (
     cold_start,
     FrozenBasisState,
     frozen_cold_start, frozen_add_token, frozen_reconstruct,
-    brand_to_frozen, hybrid_append_token,
+    brand_to_frozen, hybrid_append_token, init_frozen_streaming,
     SinkedKVState, sinked_cold_start,
 )
 from attention import frozen_compressed_attention, sinked_attention
@@ -1193,6 +1193,87 @@ def plot_sinked(results, seq_lens, path="benchmark_sinked.pdf"):
 
 
 # ---------------------------------------------------------------------------
+# Metric 11: Frozen streaming decode vs OjaKV — per-token update time
+# ---------------------------------------------------------------------------
+
+def benchmark_frozen_streaming_vs_oja(
+    warmup_len: int = 256,
+    decode_len: int = 256,
+    ranks=(8, 16, 32),
+    d: int = 64,
+    T_max: int = 2048,
+):
+    """
+    Measures decode-phase per-token update time after a shared warmup.
+
+    Warmup: first warmup_len tokens processed by Brand (TKV-exact) or OjaKV.
+    Decode: next decode_len tokens — only this phase is timed.
+
+    TKV-frozen uses init_frozen_streaming to pre-allocate the proj buffer,
+    then frozen_add_token writes in-place (O(R·d), no copy).  OjaKV still
+    runs QR on every decode token (O(R²·d)).
+
+    Uses real K/V from GPT-2 small (layer 6, head 0) on WikiText-2.
+    """
+    print("Extracting real K/V from GPT-2...")
+    K_real, V_real = extract_real_kv(max_seq_len=warmup_len + decode_len)
+    K_warm, V_warm   = K_real[:warmup_len],   V_real[:warmup_len]
+    K_decode, V_decode = K_real[warmup_len:], V_real[warmup_len:]
+    K_all = jnp.concatenate([K_warm, K_decode], axis=0)
+
+    hdr = f"{'rank':>4}  {'TKV-exact':>12}  {'Frozen':>12}  {'OjaKV':>12}  frozen_err  oja_err"
+    print(f"\nFrozen Streaming vs OjaKV — warmup={warmup_len}, decode={decode_len} tokens")
+    print(hdr)
+    print("-" * len(hdr))
+
+    for rank in ranks:
+        # --- TKV-exact (decode phase only) ---
+        state_e = init_compressed_kv(T_max, rank, d)
+        for i in range(warmup_len):
+            state_e = append_token(state_e, K_warm[i], V_warm[i], rank)
+        t0 = time.perf_counter()
+        for i in range(decode_len):
+            state_e = append_token(state_e, K_decode[i], V_decode[i], rank)
+        jax.block_until_ready(state_e.U_k)
+        ms_exact = (time.perf_counter() - t0) / decode_len * 1e3
+
+        # --- Frozen streaming (decode phase only) ---
+        state_b = init_compressed_kv(T_max, rank, d)
+        for i in range(warmup_len):
+            state_b = append_token(state_b, K_warm[i], V_warm[i], rank)
+        state_f = init_frozen_streaming(state_b, T_max)
+        t0 = time.perf_counter()
+        for i in range(decode_len):
+            state_f = frozen_add_token(state_f, K_decode[i], V_decode[i])
+        ms_frozen = (time.perf_counter() - t0) / decode_len * 1e3
+        K_frec, _ = frozen_reconstruct(state_f)
+        frozen_err = float(
+            jnp.linalg.norm(K_all - K_frec[:warmup_len + decode_len])
+            / (jnp.linalg.norm(K_all) + 1e-9)
+        )
+
+        # --- OjaKV (decode phase only) ---
+        state_o = init_oja_kv(T_max, rank, d)
+        for i in range(warmup_len):
+            state_o = append_token_oja(state_o, K_warm[i], V_warm[i], rank)
+        t0 = time.perf_counter()
+        for i in range(decode_len):
+            state_o = append_token_oja(state_o, K_decode[i], V_decode[i], rank)
+        jax.block_until_ready(state_o.V_k)
+        ms_oja = (time.perf_counter() - t0) / decode_len * 1e3
+        K_orec, _ = reconstruct_kv_oja(state_o, T_max)
+        oja_err = float(
+            jnp.linalg.norm(K_all - K_orec[:warmup_len + decode_len])
+            / (jnp.linalg.norm(K_all) + 1e-9)
+        )
+
+        print(
+            f"{rank:4d}  {ms_exact:>10.3f}ms  {ms_frozen:>10.3f}ms  {ms_oja:>10.3f}ms"
+            f"  {frozen_err:.4f}      {oja_err:.4f}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Run all benchmarks
 # ---------------------------------------------------------------------------
 
@@ -1325,6 +1406,14 @@ if __name__ == "__main__":
     )
     print_sinked_table(sinked_results, (256, 1_000, 4_000))
     plot_sinked(sinked_results, (256, 1_000, 4_000))
+
+    print()
+    print("=" * 50)
+    print("Metric 11: Frozen Streaming vs OjaKV (Decode Phase)")
+    print("=" * 50)
+    benchmark_frozen_streaming_vs_oja(
+        warmup_len=256, decode_len=256, ranks=(8, 16, 32), d=D, T_max=T_MAX,
+    )
 
     print()
     print("All benchmarks complete.")
