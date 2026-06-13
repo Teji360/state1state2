@@ -1,0 +1,12 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+Extracting real K/V from GPT-2...
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 8258.59it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+
+Frozen Streaming vs OjaKV — warmup=256, decode=256 tokens
+rank     TKV-exact        Frozen         OjaKV  frozen_err  oja_err
+-------------------------------------------------------------------
+   8       2.038ms       0.172ms       0.454ms  0.4437      1.2017
+  16       2.073ms       0.178ms       0.478ms  0.3714      1.1993
+  32       2.154ms       0.176ms       0.539ms  0.2709      1.2025
+Saved benchmark_frozen_streaming.pdf

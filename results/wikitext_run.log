@@ -1,0 +1,40 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+
+Loading TinyLlama/TinyLlama-1.1B-Chat-v1.0...
+Loading weights:   0%|          | 0/201 [00:00<?, ?it/s]Loading weights: 100%|██████████| 201/201 [00:00<00:00, 5585.99it/s]
+  layers=22  pyramid_avg=15.8
+Loading WikiText-2...
+Generating test split:   0%|          | 0/4358 [00:00<?, ? examples/s]Generating test split: 100%|██████████| 4358/4358 [00:00<00:00, 127333.87 examples/s]
+Generating train split:   0%|          | 0/36718 [00:00<?, ? examples/s]Generating train split: 100%|██████████| 36718/36718 [00:00<00:00, 2428740.80 examples/s]
+Generating validation split:   0%|          | 0/3760 [00:00<?, ? examples/s]Generating validation split: 100%|██████████| 3760/3760 [00:00<00:00, 1928415.63 examples/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (132927 > 2048). Running this sequence through the model will result in indexing errors
+  corpus tokens: 132,927
+
+  ctx=512 tokens:
+    full_kv : 9.31
+    sinked  : 36.34
+    oja     : 931.65
+
+  ctx=1,024 tokens:
+    full_kv : 8.39
+    sinked  : 88.84
+    oja     : 963.72
+
+  ctx=2,048 tokens:
+    full_kv : 10.29
+    sinked  : 658.33
+    oja     : 1794.77
+
+=======================================================================
+Long-Context Perplexity on WikiText-2 (lower = better)
+=======================================================================
+
+   ctx_len     full_kv      sinked         oja  sinked/full  sinked/oja
+-----------------------------------------------------------------------
+       512        9.31       36.34      931.65        3.902       0.039
+     1,024        8.39       88.84      963.72       10.584       0.092
+     2,048       10.29      658.33     1794.77       63.947       0.367
+=======================================================================
+sinked/full < 1.10 = <10% perplexity degradation (target)
+sinked/oja  < 1.00 = sinked beats OjaKV (goal)
+Saved wikitext_perplexity.pdf

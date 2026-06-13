@@ -13,6 +13,9 @@ Lower perplexity = better.
 import argparse
 import math
 import torch
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
 from datasets import load_dataset
 from typing import List
 
@@ -172,6 +175,26 @@ def print_ppl_table(results: dict, context_lens: List[int]):
     print("sinked/oja  < 1.00 = sinked beats OjaKV (goal)")
 
 
+def plot_ppl_results(results: dict, context_lens: List[int], path: str = "wikitext_perplexity.pdf"):
+    colors  = {"sinked": "tomato", "oja": "seagreen"}
+    markers = {"sinked": "s",      "oja": "^"}
+    labels  = {"sinked": "FrozenKV", "oja": "OjaKV"}
+
+    fig, ax = plt.subplots(figsize=(7, 4))
+    for method in ("sinked", "oja"):
+        ys = [results[method].get(c, float("nan")) for c in context_lens]
+        ax.plot(context_lens, ys, marker=markers[method], color=colors[method], label=labels[method])
+
+    ax.set_xlabel("Context Length (tokens)")
+    ax.set_ylabel("Perplexity")
+    ax.set_title("Long-Context Perplexity on WikiText-2")
+    ax.legend()
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+    print(f"Saved {path}")
+
+
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", default="mistralai/Mistral-7B-v0.1")
@@ -195,3 +218,4 @@ if __name__ == "__main__":
         max_seqs=args.max_seqs,
     )
     print_ppl_table(results, args.ctx_lens)
+    plot_ppl_results(results, args.ctx_lens)

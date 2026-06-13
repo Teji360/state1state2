@@ -1,0 +1,31 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
+=== Metric 8b: Frozen reconstruction ===
+Saved benchmark_frozen_reconstruction.pdf
+
+=== Metric 11: Frozen streaming vs OjaKV ===
+Extracting real K/V from GPT-2...
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 8198.06it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+
+Frozen Streaming vs OjaKV — warmup=256, decode=256 tokens
+rank     TKV-exact        Frozen         OjaKV  frozen_err  oja_err
+-------------------------------------------------------------------
+   8       2.020ms       0.202ms       0.481ms  0.4437      1.2017
+  16       2.248ms       0.178ms       0.542ms  0.3714      1.1993
+  32       2.109ms       0.172ms       0.558ms  0.2709      1.2025
+Saved benchmark_frozen_streaming.pdf
+
+=== Metric 9: Perplexity (with OjaKV) ===
+Loading GPT-2...
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 23687.59it/s]
+[transformers] `loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
+  Exact perplexity:                      129.62
+  Frozen pyramid (avg_rank=15):        89.59  ratio=0.6911
+  Brand TKV (uniform rank=16):           155.44  ratio=1.1992
+  OjaKV (pyramid):                       756.18  ratio=5.8338
+
+=== Summary: head-to-head ===
+Saved benchmark_head_to_head.pdf
+
+=== WikiText perplexity plot (cached results) ===
+Saved wikitext_perplexity.pdf

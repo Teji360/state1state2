@@ -1006,8 +1006,8 @@ def plot_frozen_reconstruction(frozen_err, oja_err, seq_lens, ranks, path="bench
     for rank in ranks:
         fe = [frozen_err[(t, rank)] for t in seq_lens]
         oe = [oja_err[(t, rank)] for t in seq_lens]
-        ax.plot(seq_lens, fe, marker="o", label=f"frozen r={rank}")
-        ax.plot(seq_lens, oe, marker="s", linestyle="--", label=f"oja r={rank}")
+        ax.plot(seq_lens, fe, marker="o", color="tomato", label=f"FrozenKV r={rank}")
+        ax.plot(seq_lens, oe, marker="s", linestyle="--", color="seagreen", label=f"OjaKV r={rank}")
     ax.set_xlabel("Sequence Length")
     ax.set_ylabel("Relative Frobenius Error")
     ax.set_title("Frozen Basis vs OjaKV: Reconstruction Error")
@@ -1043,6 +1043,7 @@ def benchmark_frozen_perplexity(
         load_gpt2, compute_perplexity,
         patch_gpt2_for_compression, unpatch_gpt2,
         patch_gpt2_frozen_basis, make_phi_for_gpt2, PYRAMID_RANKS,
+        patch_model_oja, unpatch_model,
     )
     if pyramid_ranks is None:
         pyramid_ranks = PYRAMID_RANKS
@@ -1065,7 +1066,12 @@ def benchmark_frozen_perplexity(
     unpatch_gpt2(model, orig)
     print(f"  Brand TKV (uniform rank=16):           {ppl_brand:.2f}  ratio={ppl_brand/ppl_exact:.4f}")
 
-    return {"exact": ppl_exact, "frozen_pyramid": ppl_frozen, "brand_r16": ppl_brand}
+    orig = patch_model_oja(model, pyramid_ranks)
+    ppl_oja = compute_perplexity(model, tokenizer, SAMPLE_TEXTS, max_length=max_length, device=device)
+    unpatch_model(model, orig)
+    print(f"  OjaKV (pyramid):                       {ppl_oja:.2f}  ratio={ppl_oja/ppl_exact:.4f}")
+
+    return {"exact": ppl_exact, "frozen_pyramid": ppl_frozen, "brand_r16": ppl_brand, "oja": ppl_oja}
 
 
 # ---------------------------------------------------------------------------
@@ -1226,6 +1232,7 @@ def benchmark_frozen_streaming_vs_oja(
     print(hdr)
     print("-" * len(hdr))
 
+    results = {}
     for rank in ranks:
         # --- TKV-exact (decode phase only) ---
         state_e = init_compressed_kv(T_max, rank, d)
@@ -1271,6 +1278,95 @@ def benchmark_frozen_streaming_vs_oja(
             f"{rank:4d}  {ms_exact:>10.3f}ms  {ms_frozen:>10.3f}ms  {ms_oja:>10.3f}ms"
             f"  {frozen_err:.4f}      {oja_err:.4f}"
         )
+        results[rank] = {
+            "ms_exact": ms_exact, "ms_frozen": ms_frozen, "ms_oja": ms_oja,
+            "frozen_err": frozen_err, "oja_err": oja_err,
+        }
+
+    return results
+
+
+def plot_frozen_streaming_vs_oja(results, ranks, path="benchmark_frozen_streaming.pdf"):
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4))
+
+    ax = axes[0]
+    ax.plot(ranks, [results[r]["ms_frozen"] for r in ranks], marker="s", linestyle="--", color="tomato", label="FrozenKV")
+    ax.plot(ranks, [results[r]["ms_oja"]    for r in ranks], marker="^", linestyle="-.", color="seagreen", label="OjaKV")
+    ax.set_xlabel("Rank")
+    ax.set_ylabel("Per-token update time (ms)")
+    ax.set_title("Decode-Phase Update Cost vs Rank")
+    ax.legend()
+
+    ax = axes[1]
+    ax.plot(ranks, [results[r]["frozen_err"] for r in ranks], marker="s", linestyle="--", color="tomato", label="FrozenKV")
+    ax.plot(ranks, [results[r]["oja_err"]    for r in ranks], marker="^", linestyle="-.", color="seagreen", label="OjaKV")
+    ax.set_xlabel("Rank")
+    ax.set_ylabel("Relative Frobenius Error")
+    ax.set_title("Decode-Phase Reconstruction Error vs Rank")
+    ax.set_yscale("log")
+    ax.legend()
+
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+    print(f"Saved {path}")
+
+
+# ---------------------------------------------------------------------------
+# Summary: Frozen vs OjaKV head-to-head
+# ---------------------------------------------------------------------------
+
+def plot_head_to_head(ppl_results, streaming_results, frozen_err, oja_err,
+                      path="benchmark_head_to_head.pdf"):
+    """
+    3-panel summary comparing Frozen (ours) vs OjaKV:
+      Left:   per-token decode time vs rank
+      Center: reconstruction error vs context length (rank=16)
+      Right:  GPT-2 perplexity bar chart (exact / frozen / oja)
+    """
+    ranks = sorted(streaming_results.keys())
+    seq_lens = sorted({sl for sl, _ in frozen_err.keys()})
+
+    fig, axes = plt.subplots(1, 3, figsize=(15, 4))
+
+    # Left: per-token update time vs rank
+    ax = axes[0]
+    ax.plot(ranks, [streaming_results[r]["ms_frozen"] for r in ranks],
+            marker="s", linestyle="--", color="tomato", label="FrozenKV")
+    ax.plot(ranks, [streaming_results[r]["ms_oja"] for r in ranks],
+            marker="^", linestyle="-.", color="seagreen", label="OjaKV")
+    ax.set_xlabel("Rank")
+    ax.set_ylabel("Per-token update time (ms)")
+    ax.set_title("Decode Speed vs Rank")
+    ax.legend()
+
+    # Center: reconstruction error vs context length at rank=16
+    ax = axes[1]
+    ax.plot(seq_lens, [frozen_err[(sl, 16)] for sl in seq_lens],
+            marker="s", linestyle="--", color="tomato", label="FrozenKV")
+    ax.plot(seq_lens, [oja_err[(sl, 16)] for sl in seq_lens],
+            marker="^", linestyle="-.", color="seagreen", label="OjaKV")
+    ax.set_xlabel("Context Length (tokens)")
+    ax.set_ylabel("Relative Frobenius Error")
+    ax.set_title("Reconstruction Error at Rank=16")
+    ax.set_xscale("log")
+    ax.set_yscale("log")
+    ax.legend()
+
+    # Right: GPT-2 perplexity bar chart (FrozenKV vs OjaKV + exact baseline)
+    ax = axes[2]
+    labels = ["Exact", "FrozenKV", "OjaKV"]
+    values = [ppl_results["exact"], ppl_results["frozen_pyramid"], ppl_results["oja"]]
+    colors = ["steelblue", "tomato", "seagreen"]
+    bars = ax.bar(labels, values, color=colors)
+    ax.bar_label(bars, fmt="%.1f", padding=3)
+    ax.set_ylabel("Perplexity (lower = better)")
+    ax.set_title("GPT-2 Perplexity Comparison")
+
+    fig.tight_layout()
+    fig.savefig(path)
+    plt.close(fig)
+    print(f"Saved {path}")
 
 
 # ---------------------------------------------------------------------------
@@ -1411,9 +1507,16 @@ if __name__ == "__main__":
     print("=" * 50)
     print("Metric 11: Frozen Streaming vs OjaKV (Decode Phase)")
     print("=" * 50)
-    benchmark_frozen_streaming_vs_oja(
+    streaming_results = benchmark_frozen_streaming_vs_oja(
         warmup_len=256, decode_len=256, ranks=(8, 16, 32), d=D, T_max=T_MAX,
     )
+    plot_frozen_streaming_vs_oja(streaming_results, ranks=(8, 16, 32))
+
+    print()
+    print("=" * 50)
+    print("Summary: Frozen vs OjaKV Head-to-Head")
+    print("=" * 50)
+    plot_head_to_head(ppl_frozen_results, streaming_results, frozen_err, oja_err_long)
 
     print()
     print("All benchmarks complete.")
