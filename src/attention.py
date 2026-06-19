@@ -1,7 +1,7 @@
 import jax
 import jax.numpy as jnp
 from typing import Optional, Tuple
-from kv_state import CompressedKVState, FrozenBasisState, SinkedKVState, reconstruct_kv, update_importance
+from kv_state import CompressedKVState, TKVState, SinkedKVState, reconstruct_kv, update_importance
 
 
 def compressed_attention(
@@ -97,14 +97,14 @@ def compressed_attention_with_weights(
     return out, new_state
 
 
-def frozen_compressed_attention(
+def tkv_compressed_attention(
     q: jnp.ndarray,           # (n_q, d)
-    state: FrozenBasisState,
+    state: TKVState,
     scale: Optional[float] = None,
     causal: bool = False,
 ) -> jnp.ndarray:
     """
-    Attention in the frozen low-rank basis. No K/V reconstruction needed.
+    Attention in the TKV frozen-phase low-rank basis. No K/V reconstruction needed.
 
     Exact in the projected subspace:
       scores[q, t] = (q @ basis_k.T) · proj_k[t]   (inner product in R-dim space)
@@ -144,7 +144,7 @@ def sinked_attention(
     """
     Attention over three segments with a single softmax:
       sink   — full precision (always exact)
-      middle — frozen-basis compressed  (may be None when T is short)
+      middle — TKV (frozen-basis) compressed  (may be None when T is short)
       recent — full precision (always exact)
 
     Absolute positions are used for the causal mask so each query sees

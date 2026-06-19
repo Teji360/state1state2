@@ -4,7 +4,7 @@ Perplexity-vs-rank sweep across model scales and context lengths.
 Answers: does the low-rank structure in attention KV caches persist as
 model scale (GPT-2 → TinyLlama-1.1B) and context length increase?
 
-Method: frozen-basis SVD compression with flat rank across all layers.
+Method: TKV (warmup-then-freeze) SVD compression with flat rank across all layers.
 SVD computed on the full context window (optimal basis for that sequence),
 so rank is the sole variable — no warmup truncation artefact.
 
@@ -23,7 +23,7 @@ import matplotlib.pyplot as plt
 from typing import Dict, List
 
 from wikitext_benchmark import load_wikitext2, sliding_perplexity
-from model_hooks import load_model, load_gpt2, patch_model_frozen_flat, unpatch_model
+from model_hooks import load_model, load_gpt2, patch_model_tkv_flat, unpatch_model
 
 MODEL_SPECS = {
     "gpt2": {
@@ -88,8 +88,8 @@ def sweep_one_model(
         # Rank sweep
         for rank in ranks:
             # Use a unique registry key per (model, rank) to avoid stale closures
-            key = f"frozen_flat_r{rank}"
-            orig = patch_model_frozen_flat(model, rank, key=key)
+            key = f"tkv_flat_r{rank}"
+            orig = patch_model_tkv_flat(model, rank, key=key)
             try:
                 ppl = sliding_perplexity(model, tok, text, ctx, stride, device, max_seqs)
             finally:

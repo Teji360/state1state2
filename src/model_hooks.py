@@ -1,5 +1,5 @@
 """
-KV cache compression via frozen-basis SVD.
+KV cache compression via TKV (warmup-then-freeze) SVD.
 
 Strategy: register a custom attention implementation in transformers'
 ALL_ATTENTION_FUNCTIONS global registry, then set model.config._attn_implementation.
@@ -15,8 +15,8 @@ import jax
 import jax.numpy as jnp
 from typing import Optional, List, Tuple
 
-from kv_state import cold_start, frozen_cold_start, sinked_cold_start
-from attention import compressed_attention_with_weights, frozen_compressed_attention, sinked_attention
+from kv_state import cold_start, tkv_cold_start, sinked_cold_start
+from attention import compressed_attention_with_weights, tkv_compressed_attention, sinked_attention
 
 # PyramidKV-style per-layer rank budget for GPT-2 (12 layers).
 # Lower layers see diffuse attention → larger rank; upper layers focus sharply → smaller rank.
@@ -82,15 +82,15 @@ def _make_compressed_attn_fn(phi: jnp.ndarray, rank: int, T_max: int):
     return _compressed_attn
 
 
-def _make_frozen_pyramid_fn(pyramid_ranks):
+def _make_tkv_pyramid_fn(pyramid_ranks):
     """
     Returns a drop-in for transformers' eager_attention_forward that uses
-    frozen-basis SVD compression with a per-layer rank budget.
+    TKV (warmup-then-freeze) SVD compression with a per-layer rank budget.
 
     The rank for each call is read from module.layer_idx, so a single
     registered function handles all layers correctly.
     """
-    def _frozen_pyramid_attn(
+    def _tkv_pyramid_attn(
         module,
         query: torch.Tensor,   # (batch, heads, seq_len, head_dim)
         key: torch.Tensor,
@@ -113,8 +113,8 @@ def _make_frozen_pyramid_fn(pyramid_ranks):
                 v_h = torch_to_jax(value[b, h])
                 q_h = torch_to_jax(query[b, h])
 
-                state = frozen_cold_start(k_h, v_h, rank)
-                out_h = frozen_compressed_attention(q_h, state, causal=True)
+                state = tkv_cold_start(k_h, v_h, rank)
+                out_h = tkv_compressed_attention(q_h, state, causal=True)
                 out_batch.append(jax_to_torch(out_h, device))
 
             out_heads.append(torch.stack(out_batch, dim=0))
@@ -122,19 +122,19 @@ def _make_frozen_pyramid_fn(pyramid_ranks):
         attn_output = torch.stack(out_heads, dim=0).transpose(1, 2)
         return attn_output, None
 
-    return _frozen_pyramid_attn
+    return _tkv_pyramid_attn
 
 
 def _make_hybrid_pyramid_fn(warmup_len, warmup_rank, pyramid_ranks):
     """
     Hybrid: Brand's SVD (full-sequence, optimal basis) for seq_len <= warmup_len;
-    frozen-basis projection with PyramidKV layer ranks for seq_len > warmup_len.
+    TKV frozen-phase projection with PyramidKV layer ranks for seq_len > warmup_len.
 
     In batch/teacher-forcing mode the hook always receives the full sequence at once,
-    so both phases use a single frozen_cold_start call — the difference is:
+    so both phases use a single tkv_cold_start call — the difference is:
       - short (T <= warmup_len): SVD computed on all T tokens → optimal rank-R basis
       - long  (T >  warmup_len): SVD on first warmup_len tokens, rest projected
-    The warmup phase uses a flat warmup_rank; frozen phase uses layer-adaptive ranks.
+    The warmup phase uses a flat warmup_rank; TKV frozen phase uses layer-adaptive ranks.
     """
     def _hybrid_attn(
         module,
@@ -164,8 +164,8 @@ def _make_hybrid_pyramid_fn(warmup_len, warmup_rank, pyramid_ranks):
                 v_h = torch_to_jax(value[b, h])
                 q_h = torch_to_jax(query[b, h])
 
-                state = frozen_cold_start(k_h, v_h, rank, warmup_len=warmup_len)
-                out_h = frozen_compressed_attention(q_h, state, causal=True)
+                state = tkv_cold_start(k_h, v_h, rank, warmup_len=warmup_len)
+                out_h = tkv_compressed_attention(q_h, state, causal=True)
                 out_batch.append(jax_to_torch(out_h, device))
 
             out_heads.append(torch.stack(out_batch, dim=0))
@@ -177,7 +177,7 @@ def _make_hybrid_pyramid_fn(warmup_len, warmup_rank, pyramid_ranks):
 
 def _make_sinked_attn_fn(sink_len, window_len, warmup_len, pyramid_ranks):
     """
-    Full-precision sink + recent tokens, frozen-basis compressed middle.
+    Full-precision sink + recent tokens, TKV (frozen-basis) compressed middle.
     Per-layer rank budget from pyramid_ranks (PyramidKV-style).
     Sink concept: Xiao et al. (2023) arXiv:2309.17453
     """
@@ -227,7 +227,7 @@ def patch_gpt2_sinked(
     """
     Registers sinked attention and activates it for model.
     First/last sink_len/window_len tokens kept full-precision per StreamingLLM.
-    Middle tokens compressed with frozen-basis SVD at PyramidKV layer ranks.
+    Middle tokens compressed with TKV (frozen-basis) SVD at PyramidKV layer ranks.
     Returns original _attn_implementation for restoration.
     """
     from transformers.models.gpt2.modeling_gpt2 import ALL_ATTENTION_FUNCTIONS
@@ -253,7 +253,7 @@ def patch_gpt2_hybrid(
     """
     Registers the hybrid attention and activates it for model.
     Short sequences use Brand's-equivalent full SVD at warmup_rank.
-    Long sequences switch to PyramidKV frozen-basis at layer-adaptive ranks.
+    Long sequences switch to PyramidKV TKV (frozen-basis) at layer-adaptive ranks.
     Returns the original _attn_implementation string for restoration.
     """
     from transformers.models.gpt2.modeling_gpt2 import ALL_ATTENTION_FUNCTIONS
@@ -270,9 +270,9 @@ def patch_gpt2_hybrid(
     return original_impl
 
 
-def patch_gpt2_frozen_basis(model, pyramid_ranks=None) -> str:
+def patch_gpt2_tkv(model, pyramid_ranks=None) -> str:
     """
-    Registers the frozen-basis pyramid attention and activates it for model.
+    Registers the TKV pyramid attention and activates it for model.
     Returns the original _attn_implementation string so it can be restored.
     """
     from transformers.models.gpt2.modeling_gpt2 import ALL_ATTENTION_FUNCTIONS
@@ -281,10 +281,10 @@ def patch_gpt2_frozen_basis(model, pyramid_ranks=None) -> str:
         pyramid_ranks = PYRAMID_RANKS
 
     ALL_ATTENTION_FUNCTIONS.register(
-        "frozen_pyramid", _make_frozen_pyramid_fn(pyramid_ranks)
+        "tkv_pyramid", _make_tkv_pyramid_fn(pyramid_ranks)
     )
     original_impl = model.config._attn_implementation
-    model.config._attn_implementation = "frozen_pyramid"
+    model.config._attn_implementation = "tkv_pyramid"
     return original_impl
 
 
@@ -546,7 +546,7 @@ def patch_model_oja(
     key: str = "oja_gqa",
 ) -> str:
     """
-    Generic OjaKV baseline patch (bare Oja rule, no sink/window, no frozen transition).
+    Generic OjaKV baseline patch (bare Oja rule, no sink/window, no TKV freeze transition).
     """
     from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
     if pyramid_ranks is None:
@@ -564,9 +564,9 @@ def unpatch_model(model, original_impl: str) -> None:
     model.config._attn_implementation = original_impl
 
 
-def _make_generic_frozen_flat_fn(rank: int):
+def _make_generic_tkv_flat_fn(rank: int):
     """
-    GQA-aware flat-rank frozen-basis hook — pure PyTorch, no JAX conversions.
+    GQA-aware flat-rank TKV (frozen-phase) hook — pure PyTorch, no JAX conversions.
 
     Avoids the 100x slowdown from per-head torch→jax→torch round-trips by
     batching SVD and attention across all KV heads in one shot.
@@ -638,14 +638,14 @@ def _make_generic_frozen_flat_fn(rank: int):
     return _attn
 
 
-def patch_model_frozen_flat(model, rank: int, key: str = "frozen_flat") -> str:
+def patch_model_tkv_flat(model, rank: int, key: str = "tkv_flat") -> str:
     """
-    Registers flat-rank frozen-basis attention and activates it for model.
+    Registers flat-rank TKV attention and activates it for model.
     Identical rank budget for every layer — used for rank sweep benchmarks.
     Returns original _attn_implementation for restoration.
     """
     from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
-    ALL_ATTENTION_FUNCTIONS.register(key, _make_generic_frozen_flat_fn(rank))
+    ALL_ATTENTION_FUNCTIONS.register(key, _make_generic_tkv_flat_fn(rank))
     original = model.config._attn_implementation
     model.config._attn_implementation = key
     return original

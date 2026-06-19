@@ -21,12 +21,12 @@ from kv_state import (
     init_compressed_kv, append_token, reconstruct_kv,
     init_lazy_kv, append_token_lazy, reconstruct_kv_lazy,
     cold_start,
-    FrozenBasisState,
-    frozen_cold_start, frozen_add_token, frozen_reconstruct,
-    brand_to_frozen, hybrid_append_token, init_frozen_streaming,
+    TKVState,
+    tkv_cold_start, tkv_add_token, tkv_reconstruct,
+    brand_to_tkv, hybrid_append_token, init_tkv_streaming,
     SinkedKVState, sinked_cold_start,
 )
-from attention import frozen_compressed_attention, sinked_attention
+from attention import tkv_compressed_attention, sinked_attention
 from oja_kv import init_oja_kv, append_token_oja, reconstruct_kv_oja
 from model_hooks import load_gpt2
 
@@ -290,7 +290,8 @@ def benchmark_wikitext_perplexity(
     device="cpu",
 ):
     """
-    Sliding-window perplexity on WikiText-2 test set for TKV (Brand's method).
+    Sliding-window perplexity on WikiText-2 test set for the Halko cold-start
+    compressed attention (single SVD per forward call, no Brand streaming).
     Replaces the held-out sentence evaluation with a standard reproducible benchmark.
     """
     import math
@@ -341,7 +342,7 @@ def benchmark_wikitext_perplexity(
 # Metric 4: TKV vs OjaKV head-to-head
 # ---------------------------------------------------------------------------
 
-def benchmark_tkv_vs_oja(
+def benchmark_brand_vs_oja(
     seq_lens=(32, 64, 128, 256, 512),
     ranks=(2, 4, 8, 16, 32),
     d=64,
@@ -355,24 +356,24 @@ def benchmark_tkv_vs_oja(
     """
     print("Extracting real K/V from GPT-2...")
     K_real, V_real = extract_real_kv(max_seq_len=max(seq_lens))
-    tkv_err, oja_err = {}, {}
-    tkv_time, oja_time = {}, {}
+    brand_err, oja_err = {}, {}
+    brand_time, oja_time = {}, {}
 
     for seq_len in seq_lens:
         K_true = K_real[:seq_len]
         V_true = V_real[:seq_len]
 
         for rank in ranks:
-            # --- TKV ---
-            state_t = init_compressed_kv(T_max, rank, d)
+            # --- BrandOnly ---
+            state_brand = init_compressed_kv(T_max, rank, d)
             t0 = time.perf_counter()
             for i in range(seq_len):
-                state_t = append_token(state_t, K_true[i], V_true[i], rank)
-            jax.block_until_ready(state_t.U_k)
-            tkv_time[(seq_len, rank)] = (time.perf_counter() - t0) / seq_len
+                state_brand = append_token(state_brand, K_true[i], V_true[i], rank)
+            jax.block_until_ready(state_brand.U_k)
+            brand_time[(seq_len, rank)] = (time.perf_counter() - t0) / seq_len
 
-            K_rec, _ = reconstruct_kv(state_t, T_max)
-            tkv_err[(seq_len, rank)] = float(
+            K_rec, _ = reconstruct_kv(state_brand, T_max)
+            brand_err[(seq_len, rank)] = float(
                 jnp.linalg.norm(K_true - K_rec[:seq_len])
                 / (jnp.linalg.norm(K_true) + 1e-9)
             )
@@ -391,19 +392,19 @@ def benchmark_tkv_vs_oja(
                 / (jnp.linalg.norm(K_true) + 1e-9)
             )
 
-    return tkv_err, oja_err, tkv_time, oja_time
+    return brand_err, oja_err, brand_time, oja_time
 
 
 def _run_one_head_comparison(K_head, V_head, seq_len, rank, T_max=1024, d=64):
-    """Run TKV vs OjaKV on one (K, V) pair; return (tkv_rel_err, oja_rel_err)."""
+    """Run BrandOnly vs OjaKV on one (K, V) pair; return (brand_rel_err, oja_rel_err)."""
     K_true = K_head[:seq_len]
     V_true = V_head[:seq_len]
 
-    state_t = init_compressed_kv(T_max, rank, d)
+    state_brand = init_compressed_kv(T_max, rank, d)
     for i in range(seq_len):
-        state_t = append_token(state_t, K_true[i], V_true[i], rank)
-    K_rec, _ = reconstruct_kv(state_t, T_max)
-    tkv_e = float(jnp.linalg.norm(K_true - K_rec[:seq_len]) / (jnp.linalg.norm(K_true) + 1e-9))
+        state_brand = append_token(state_brand, K_true[i], V_true[i], rank)
+    K_rec, _ = reconstruct_kv(state_brand, T_max)
+    brand_e = float(jnp.linalg.norm(K_true - K_rec[:seq_len]) / (jnp.linalg.norm(K_true) + 1e-9))
 
     state_o = init_oja_kv(T_max, rank, d)
     for i in range(seq_len):
@@ -411,7 +412,7 @@ def _run_one_head_comparison(K_head, V_head, seq_len, rank, T_max=1024, d=64):
     K_rec_o, _ = reconstruct_kv_oja(state_o, T_max)
     oja_e = float(jnp.linalg.norm(K_true - K_rec_o[:seq_len]) / (jnp.linalg.norm(K_true) + 1e-9))
 
-    return tkv_e, oja_e
+    return brand_e, oja_e
 
 
 def benchmark_multi_head_comparison(
@@ -423,7 +424,7 @@ def benchmark_multi_head_comparison(
     T_max=1024,
 ):
     """
-    Sweep TKV vs OjaKV over multiple GPT-2 small layers and heads.
+    Sweep BrandOnly vs OjaKV over multiple GPT-2 small layers and heads.
     Reports mean ± std of reconstruction error and advantage across all configs.
     15 configurations = 5 layers × 3 heads.
     """
@@ -432,7 +433,7 @@ def benchmark_multi_head_comparison(
     configs = [(l, h) for l in layers for h in heads]
     max_len = max(seq_lens)
 
-    all_tkv = {(t, r): [] for t in seq_lens for r in ranks}
+    all_brand = {(t, r): [] for t in seq_lens for r in ranks}
     all_oja = {(t, r): [] for t in seq_lens for r in ranks}
 
     for layer_idx, head_idx in configs:
@@ -440,27 +441,27 @@ def benchmark_multi_head_comparison(
         K, V = extract_real_kv(max_seq_len=max_len, layer_idx=layer_idx, head_idx=head_idx)
         for seq_len in seq_lens:
             for rank in ranks:
-                te, oe = _run_one_head_comparison(K, V, seq_len, rank, T_max, d)
-                all_tkv[(seq_len, rank)].append(te)
+                be, oe = _run_one_head_comparison(K, V, seq_len, rank, T_max, d)
+                all_brand[(seq_len, rank)].append(be)
                 all_oja[(seq_len, rank)].append(oe)
 
-    print("\nMulti-head TKV vs OjaKV (mean ± std over {} configs)".format(len(configs)))
-    hdr = f"{'T':>4} {'R':>3}  {'TKV':^16}  {'OjaKV':^16}  {'Advantage':^14}"
+    print("\nMulti-head BrandOnly vs OjaKV (mean ± std over {} configs)".format(len(configs)))
+    hdr = f"{'T':>4} {'R':>3}  {'BrandOnly':^16}  {'OjaKV':^16}  {'Advantage':^14}"
     print(hdr)
     print("-" * len(hdr))
     for seq_len in seq_lens:
         for rank in ranks:
-            tkv_arr = np.array(all_tkv[(seq_len, rank)])
+            brand_arr = np.array(all_brand[(seq_len, rank)])
             oja_arr = np.array(all_oja[(seq_len, rank)])
-            adv_arr = oja_arr / (tkv_arr + 1e-9)
+            adv_arr = oja_arr / (brand_arr + 1e-9)
             print(
                 f"{seq_len:4d} {rank:3d}  "
-                f"{tkv_arr.mean():.3f}±{tkv_arr.std():.3f}  "
+                f"{brand_arr.mean():.3f}±{brand_arr.std():.3f}  "
                 f"{oja_arr.mean():.3f}±{oja_arr.std():.3f}  "
                 f"{adv_arr.mean():.2f}×±{adv_arr.std():.2f}×"
             )
 
-    return all_tkv, all_oja
+    return all_brand, all_oja
 
 
 def benchmark_streaming_error(rank=16, seq_len=512, d=64, T_max=1024):
@@ -472,37 +473,37 @@ def benchmark_streaming_error(rank=16, seq_len=512, d=64, T_max=1024):
     """
     K_true, V_true = extract_real_kv(max_seq_len=seq_len)
 
-    state_t = init_compressed_kv(T_max, rank, d)
+    state_brand = init_compressed_kv(T_max, rank, d)
     state_o = init_oja_kv(T_max, rank, d)
 
-    tkv_curve, oja_curve = [], []
+    brand_curve, oja_curve = [], []
     for i in range(seq_len):
-        state_t = append_token(state_t, K_true[i], V_true[i], rank)
+        state_brand = append_token(state_brand, K_true[i], V_true[i], rank)
         state_o = append_token_oja(state_o, K_true[i], V_true[i], rank)
 
         if (i + 1) % 8 == 0:
             t = i + 1
-            K_t, _ = reconstruct_kv(state_t, T_max)
+            K_t, _ = reconstruct_kv(state_brand, T_max)
             K_o, _ = reconstruct_kv_oja(state_o, T_max)
             ref = float(jnp.linalg.norm(K_true[:t])) + 1e-9
-            tkv_curve.append((t, float(jnp.linalg.norm(K_true[:t] - K_t[:t])) / ref))
+            brand_curve.append((t, float(jnp.linalg.norm(K_true[:t] - K_t[:t])) / ref))
             oja_curve.append((t, float(jnp.linalg.norm(K_true[:t] - K_o[:t])) / ref))
 
-    return tkv_curve, oja_curve
+    return brand_curve, oja_curve
 
 
 def plot_comparison(
-    tkv_err, oja_err, tkv_time, oja_time,
-    tkv_curve, oja_curve,
+    brand_err, oja_err, brand_time, oja_time,
+    brand_curve, oja_curve,
     seq_lens, ranks,
-    path="benchmark_comparison.pdf",
+    path="benchmark_brand_vs_oja.pdf",
 ):
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
     # Panel 1: reconstruction error vs rank at longest seq_len
     ax = axes[0]
     t = seq_lens[-1]
-    ax.plot(ranks, [tkv_err[(t, r)] for r in ranks], marker="o", label="TKV (Brand)")
+    ax.plot(ranks, [brand_err[(t, r)] for r in ranks], marker="o", label="BrandOnly")
     ax.plot(ranks, [oja_err[(t, r)] for r in ranks], marker="s", linestyle="--", label="OjaKV (Oja)")
     ax.set_xlabel("Rank")
     ax.set_ylabel("Relative Frobenius Error")
@@ -512,9 +513,9 @@ def plot_comparison(
 
     # Panel 2: error accumulation over tokens (streaming)
     ax = axes[1]
-    ts_t, errs_t = zip(*tkv_curve)
+    ts_t, errs_t = zip(*brand_curve)
     ts_o, errs_o = zip(*oja_curve)
-    ax.plot(ts_t, errs_t, marker="o", markersize=3, label="TKV (Brand)")
+    ax.plot(ts_t, errs_t, marker="o", markersize=3, label="BrandOnly")
     ax.plot(ts_o, errs_o, marker="s", markersize=3, linestyle="--", label="OjaKV (Oja)")
     ax.set_xlabel("Tokens Processed")
     ax.set_ylabel("Relative Frobenius Error")
@@ -525,9 +526,9 @@ def plot_comparison(
     # Panel 3: per-token update time vs rank
     ax = axes[2]
     t = seq_lens[-1]
-    tkv_times = [tkv_time[(t, r)] * 1e3 for r in ranks]
+    brand_times = [brand_time[(t, r)] * 1e3 for r in ranks]
     oja_times = [oja_time[(t, r)] * 1e3 for r in ranks]
-    ax.plot(ranks, tkv_times, marker="o", label="TKV (Brand)")
+    ax.plot(ranks, brand_times, marker="o", label="BrandOnly")
     ax.plot(ranks, oja_times, marker="s", linestyle="--", label="OjaKV (Oja)")
     ax.set_xlabel("Rank")
     ax.set_ylabel("ms / token")
@@ -550,7 +551,7 @@ def benchmark_flush_sweep(
 ):
     """
     For each flush_every value, measure reconstruction error and ms/tok vs
-    exact TKV (flush=1) and OjaKV.  Same data and rank budget throughout.
+    exact BrandOnly (flush=1) and OjaKV.  Same data and rank budget throughout.
     """
     key = jax.random.PRNGKey(seed)
     results = {}   # (method_label, seq_len, rank) -> {err, ms_tok}
@@ -564,7 +565,7 @@ def benchmark_flush_sweep(
         for rank in ranks:
             ref = float(jnp.linalg.norm(K_true)) + 1e-9
 
-            # --- Exact TKV baseline (flush_every=1 uses _brand_update directly) ---
+            # --- Exact BrandOnly baseline (flush_every=1 uses _brand_update directly) ---
             state_e = init_compressed_kv(T_max, rank, d)
             t0 = time.perf_counter()
             for i in range(seq_len):
@@ -573,11 +574,11 @@ def benchmark_flush_sweep(
             ms_tok_e = (time.perf_counter() - t0) / seq_len * 1e3
             K_rec_e, _ = reconstruct_kv(state_e, T_max)
             err_e = float(jnp.linalg.norm(K_true - K_rec_e[:seq_len])) / ref
-            results[("TKV-exact", seq_len, rank)] = {"err": err_e, "ms_tok": ms_tok_e}
+            results[("BrandOnly-exact", seq_len, rank)] = {"err": err_e, "ms_tok": ms_tok_e}
 
-            # --- Lazy TKV variants (flush_every > 1) ---
+            # --- Lazy BrandOnly variants (flush_every > 1) ---
             for fe in [fe for fe in flush_every_vals if fe > 1]:
-                label = f"TKV-flush{fe}"
+                label = f"BrandOnly-flush{fe}"
                 state = init_lazy_kv(T_max, rank, d)
                 t0 = time.perf_counter()
                 for i in range(seq_len):
@@ -616,7 +617,7 @@ def plot_flush_sweep(results, flush_every_vals, seq_lens, ranks, path="benchmark
         ax_err, ax_spd = axes[row]
 
         for ci, fe in enumerate(flush_every_vals):
-            label = f"TKV-flush{fe}" if fe > 1 else "TKV-exact"
+            label = f"BrandOnly-flush{fe}" if fe > 1 else "BrandOnly-exact"
             errs = [results[(label, seq_len, r)]["err"] for r in ranks]
             spds = [results[(label, seq_len, r)]["ms_tok"] for r in ranks]
             ls = "-" if fe == 1 else "--"
@@ -646,7 +647,7 @@ def plot_flush_sweep(results, flush_every_vals, seq_lens, ranks, path="benchmark
 
 
 def print_flush_table(results, flush_every_vals, seq_len, ranks):
-    labels = [f"TKV-flush{fe}" if fe > 1 else "TKV-exact" for fe in flush_every_vals] + ["OjaKV"]
+    labels = [f"BrandOnly-flush{fe}" if fe > 1 else "BrandOnly-exact" for fe in flush_every_vals] + ["OjaKV"]
     header = f"{'rank':>5}" + "".join(f"  {l:>14}" for l in labels)
     print(f"\nt={seq_len} — error / ms_tok")
     print(header)
@@ -659,17 +660,17 @@ def print_flush_table(results, flush_every_vals, seq_len, ranks):
         print(row)
 
 
-def print_comparison_table(tkv_err, oja_err, tkv_time, oja_time, seq_lens, ranks):
-    print(f"\n{'seq':>5} {'rank':>4}  {'TKV err':>9}  {'Oja err':>9}  {'TKV ms/tok':>10}  {'Oja ms/tok':>10}  {'err ratio':>9}")
+def print_comparison_table(brand_err, oja_err, brand_time, oja_time, seq_lens, ranks):
+    print(f"\n{'seq':>5} {'rank':>4}  {'Brand err':>9}  {'Oja err':>9}  {'Brand ms/tok':>10}  {'Oja ms/tok':>10}  {'err ratio':>9}")
     print("-" * 70)
     for seq_len in seq_lens:
         for rank in ranks:
-            te = tkv_err[(seq_len, rank)]
+            be = brand_err[(seq_len, rank)]
             oe = oja_err[(seq_len, rank)]
-            tt = tkv_time[(seq_len, rank)] * 1e3
+            bt = brand_time[(seq_len, rank)] * 1e3
             ot = oja_time[(seq_len, rank)] * 1e3
-            ratio = oe / (te + 1e-12)
-            print(f"{seq_len:>5} {rank:>4}  {te:>9.4f}  {oe:>9.4f}  {tt:>10.3f}  {ot:>10.3f}  {ratio:>9.2f}x")
+            ratio = oe / (be + 1e-12)
+            print(f"{seq_len:>5} {rank:>4}  {be:>9.4f}  {oe:>9.4f}  {bt:>10.3f}  {ot:>10.3f}  {ratio:>9.2f}x")
 
 
 # ---------------------------------------------------------------------------
@@ -779,7 +780,7 @@ def plot_importance(results, ranks, path="benchmark_importance.pdf"):
 
 
 # ---------------------------------------------------------------------------
-# Frozen-basis long-context benchmarks (128K+ target)
+# TKV (warmup-then-freeze) long-context benchmarks (128K+ target)
 # ---------------------------------------------------------------------------
 
 # GPT-2 small geometry used for memory calculations
@@ -789,7 +790,7 @@ _GPT2_HEADS  = 12
 PYRAMID_RANKS_GPT2 = [32, 32, 32, 16, 16, 16, 8, 8, 8, 4, 4, 4]
 
 
-def _frozen_bytes(seq_len: int, rank: int, d: int) -> int:
+def _tkv_bytes(seq_len: int, rank: int, d: int) -> int:
     """Bytes for one head: proj_k (T×R) + proj_v (T×R) + basis_k (R×d) + basis_v (R×d), float32."""
     return 4 * (2 * seq_len * rank + 2 * rank * d)
 
@@ -803,9 +804,9 @@ def benchmark_hybrid_streaming(
 ):
     """
     Simulates token-by-token streaming for three methods:
-      - Brand's only:  exact SVD throughout, O(R³ + T·R²) per token
-      - Frozen only:   SVD on first warmup_len tokens, O(R·d) after
-      - Hybrid:        Brand's until warmup_len, then frozen (brand_to_frozen)
+      - BrandOnly: exact SVD throughout, O(R³ + T·R²) per token
+      - TKV only:  SVD on first warmup_len tokens, O(R·d) after
+      - Hybrid:    Brand's until warmup_len, then TKV freeze (brand_to_tkv)
 
     Reports reconstruction error and total update time at each seq_len.
     """
@@ -831,30 +832,30 @@ def benchmark_hybrid_streaming(
         K_b, _ = reconstruct_kv(state_b, T_max)
         brand_err = float(jnp.linalg.norm(K_true - K_b[:seq_len])) / ref
 
-        # Frozen only (batch SVD on warmup, then stream)
+        # TKV only (batch SVD on warmup, then stream)
         t0 = time.perf_counter()
-        state_f = frozen_cold_start(K_true[:min(seq_len, warmup_len)],
-                                    V_true[:min(seq_len, warmup_len)], rank)
+        state_f = tkv_cold_start(K_true[:min(seq_len, warmup_len)],
+                                 V_true[:min(seq_len, warmup_len)], rank)
         for i in range(min(seq_len, warmup_len), seq_len):
-            state_f = frozen_add_token(state_f, K_true[i], V_true[i])
-        frozen_ms = (time.perf_counter() - t0) * 1e3
-        K_f, _ = frozen_reconstruct(state_f)
-        frozen_err = float(jnp.linalg.norm(K_true - K_f)) / ref
+            state_f = tkv_add_token(state_f, K_true[i], V_true[i])
+        tkv_ms = (time.perf_counter() - t0) * 1e3
+        K_f, _ = tkv_reconstruct(state_f)
+        tkv_err = float(jnp.linalg.norm(K_true - K_f)) / ref
 
-        # Hybrid (Brand's until warmup_len, then auto-converts to frozen)
+        # Hybrid (Brand's until warmup_len, then auto-converts to TKV freeze)
         t0 = time.perf_counter()
         state_h = init_compressed_kv(T_max, rank, d)
         for i in range(seq_len):
             state_h = hybrid_append_token(state_h, K_true[i], V_true[i], rank,
                                           warmup_len=warmup_len)
         hybrid_ms = (time.perf_counter() - t0) * 1e3
-        K_h, _ = frozen_reconstruct(state_h) if isinstance(state_h, FrozenBasisState) \
+        K_h, _ = tkv_reconstruct(state_h) if isinstance(state_h, TKVState) \
                   else reconstruct_kv(state_h, T_max)
         hybrid_err = float(jnp.linalg.norm(K_true - K_h[:seq_len])) / ref
 
         results[seq_len] = {
             "brand_err": brand_err,  "brand_ms": brand_ms,
-            "frozen_err": frozen_err, "frozen_ms": frozen_ms,
+            "tkv_err": tkv_err, "tkv_ms": tkv_ms,
             "hybrid_err": hybrid_err, "hybrid_ms": hybrid_ms,
         }
 
@@ -862,37 +863,37 @@ def benchmark_hybrid_streaming(
 
 
 def print_hybrid_table(results, seq_lens):
-    print(f"\n{'T':>8}  {'brand err':>10}  {'frozen err':>11}  {'hybrid err':>11}"
-          f"  {'brand ms':>9}  {'frozen ms':>10}  {'hybrid ms':>10}")
+    print(f"\n{'T':>8}  {'brand err':>10}  {'tkv err':>11}  {'hybrid err':>11}"
+          f"  {'brand ms':>9}  {'tkv ms':>10}  {'hybrid ms':>10}")
     print("-" * 80)
     for t in seq_lens:
         r = results[t]
-        print(f"{t:>8,}  {r['brand_err']:>10.4f}  {r['frozen_err']:>11.4f}"
+        print(f"{t:>8,}  {r['brand_err']:>10.4f}  {r['tkv_err']:>11.4f}"
               f"  {r['hybrid_err']:>11.4f}  {r['brand_ms']:>9.1f}"
-              f"  {r['frozen_ms']:>10.1f}  {r['hybrid_ms']:>10.1f}")
+              f"  {r['tkv_ms']:>10.1f}  {r['hybrid_ms']:>10.1f}")
 
 
 def plot_hybrid(results, seq_lens, path="benchmark_hybrid.pdf"):
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
     ax = axes[0]
-    ax.plot(seq_lens, [results[t]["brand_err"]  for t in seq_lens], marker="o", label="Brand's only")
-    ax.plot(seq_lens, [results[t]["frozen_err"] for t in seq_lens], marker="s", linestyle="--", label="Frozen only")
+    ax.plot(seq_lens, [results[t]["brand_err"] for t in seq_lens], marker="o", label="BrandOnly")
+    ax.plot(seq_lens, [results[t]["tkv_err"] for t in seq_lens], marker="s", linestyle="--", label="TKV only")
     ax.plot(seq_lens, [results[t]["hybrid_err"] for t in seq_lens], marker="^", linestyle="-.", label="Hybrid (ours)")
     ax.set_xlabel("Sequence Length")
     ax.set_ylabel("Relative Frobenius Error")
-    ax.set_title("Hybrid vs Brand vs Frozen: Reconstruction Error")
+    ax.set_title("Hybrid vs BrandOnly vs TKV: Reconstruction Error")
     ax.set_yscale("log")
     ax.set_xscale("log")
     ax.legend()
 
     ax = axes[1]
-    ax.plot(seq_lens, [results[t]["brand_ms"]  for t in seq_lens], marker="o", label="Brand's only")
-    ax.plot(seq_lens, [results[t]["frozen_ms"] for t in seq_lens], marker="s", linestyle="--", label="Frozen only")
+    ax.plot(seq_lens, [results[t]["brand_ms"] for t in seq_lens], marker="o", label="BrandOnly")
+    ax.plot(seq_lens, [results[t]["tkv_ms"] for t in seq_lens], marker="s", linestyle="--", label="TKV only")
     ax.plot(seq_lens, [results[t]["hybrid_ms"] for t in seq_lens], marker="^", linestyle="-.", label="Hybrid (ours)")
     ax.set_xlabel("Sequence Length")
     ax.set_ylabel("Total update time (ms)")
-    ax.set_title("Hybrid vs Brand vs Frozen: Update Cost")
+    ax.set_title("Hybrid vs BrandOnly vs TKV: Update Cost")
     ax.set_xscale("log")
     ax.legend()
 
@@ -902,7 +903,7 @@ def plot_hybrid(results, seq_lens, path="benchmark_hybrid.pdf"):
     print(f"Saved {path}")
 
 
-def benchmark_frozen_vs_oja_memory(
+def benchmark_tkv_vs_oja_memory(
     seq_lens=(1_000, 8_000, 32_000, 128_000),
     pyramid_ranks=None,
     uniform_rank=8,
@@ -910,7 +911,7 @@ def benchmark_frozen_vs_oja_memory(
 ):
     """
     Theoretical memory comparison across methods at long context lengths.
-    Reports GB for full KV, uniform-rank OjaKV-style, and frozen pyramid.
+    Reports GB for full KV, uniform-rank OjaKV-style, and TKV pyramid.
     """
     if pyramid_ranks is None:
         pyramid_ranks = PYRAMID_RANKS_GPT2
@@ -920,37 +921,37 @@ def benchmark_frozen_vs_oja_memory(
         full_bytes = 4 * 2 * seq_len * d * _GPT2_LAYERS * _GPT2_HEADS  # float32
 
         oja_bytes = sum(
-            _frozen_bytes(seq_len, uniform_rank, d) * _GPT2_HEADS
+            _tkv_bytes(seq_len, uniform_rank, d) * _GPT2_HEADS
             for _ in range(_GPT2_LAYERS)
         )
 
         pyramid_bytes = sum(
-            _frozen_bytes(seq_len, pyramid_ranks[l], d) * _GPT2_HEADS
+            _tkv_bytes(seq_len, pyramid_ranks[l], d) * _GPT2_HEADS
             for l in range(_GPT2_LAYERS)
         )
 
         results[seq_len] = {
-            "full_gb":          full_bytes    / 1e9,
-            "oja_uniform_gb":   oja_bytes     / 1e9,
-            "frozen_pyramid_gb": pyramid_bytes / 1e9,
+            "full_gb":        full_bytes    / 1e9,
+            "oja_uniform_gb": oja_bytes     / 1e9,
+            "tkv_pyramid_gb": pyramid_bytes / 1e9,
             "pyramid_vs_full":  full_bytes / pyramid_bytes,
         }
 
     return results
 
 
-def print_frozen_memory_table(results, seq_lens):
-    print(f"\n{'seq_len':>10}  {'full KV':>9}  {'OjaKV r=8':>10}  {'Frozen pyramid':>15}  {'compression':>12}")
+def print_tkv_memory_table(results, seq_lens):
+    print(f"\n{'seq_len':>10}  {'full KV':>9}  {'OjaKV r=8':>10}  {'TKV pyramid':>15}  {'compression':>12}")
     print("-" * 65)
     for t in seq_lens:
         r = results[t]
         print(
             f"{t:>10,}  {r['full_gb']:>8.3f}GB  {r['oja_uniform_gb']:>9.3f}GB"
-            f"  {r['frozen_pyramid_gb']:>14.3f}GB  {r['pyramid_vs_full']:>10.1f}x"
+            f"  {r['tkv_pyramid_gb']:>14.3f}GB  {r['pyramid_vs_full']:>10.1f}x"
         )
 
 
-def benchmark_frozen_reconstruction(
+def benchmark_tkv_reconstruction(
     seq_lens=(1_000, 8_000, 32_000),
     ranks=(4, 8, 16),
     warmup_len=512,
@@ -958,12 +959,12 @@ def benchmark_frozen_reconstruction(
     seed=0,
 ):
     """
-    Frobenius reconstruction error for frozen-basis at long context lengths.
+    Frobenius reconstruction error for TKV (frozen-basis) at long context lengths.
     Uses warmup_len tokens to establish the basis; remaining tokens are projected.
     Compares against OjaKV at the same rank.
     """
     key = jax.random.PRNGKey(seed)
-    frozen_err, oja_err = {}, {}
+    tkv_err, oja_err = {}, {}
 
     for seq_len in seq_lens:
         k1, k2 = jax.random.split(key)
@@ -973,10 +974,10 @@ def benchmark_frozen_reconstruction(
         ref = float(jnp.linalg.norm(K_true)) + 1e-9
 
         for rank in ranks:
-            # Frozen basis
-            state_fr = frozen_cold_start(K_true, V_true, rank, warmup_len=warmup_len)
-            K_fr, _ = frozen_reconstruct(state_fr)
-            frozen_err[(seq_len, rank)] = float(jnp.linalg.norm(K_true - K_fr)) / ref
+            # TKV (frozen basis)
+            state_tkv = tkv_cold_start(K_true, V_true, rank, warmup_len=warmup_len)
+            K_tkv, _ = tkv_reconstruct(state_tkv)
+            tkv_err[(seq_len, rank)] = float(jnp.linalg.norm(K_true - K_tkv)) / ref
 
             # OjaKV (streaming, same rank)
             T_max = seq_len + 1
@@ -986,42 +987,42 @@ def benchmark_frozen_reconstruction(
             K_oj, _ = reconstruct_kv_oja(state_o, T_max)
             oja_err[(seq_len, rank)] = float(jnp.linalg.norm(K_true - K_oj[:seq_len])) / ref
 
-    return frozen_err, oja_err
+    return tkv_err, oja_err
 
 
-def print_frozen_reconstruction_table(frozen_err, oja_err, seq_lens, ranks):
-    print(f"\n{'seq_len':>10}  {'rank':>5}  {'frozen err':>11}  {'oja err':>10}  {'frozen wins':>12}")
+def print_tkv_reconstruction_table(tkv_err, oja_err, seq_lens, ranks):
+    print(f"\n{'seq_len':>10}  {'rank':>5}  {'tkv err':>11}  {'oja err':>10}  {'tkv wins':>12}")
     print("-" * 60)
     for seq_len in seq_lens:
         for rank in ranks:
-            fe = frozen_err[(seq_len, rank)]
+            te = tkv_err[(seq_len, rank)]
             oe = oja_err[(seq_len, rank)]
-            print(f"{seq_len:>10,}  {rank:>5}  {fe:>11.4f}  {oe:>10.4f}  {'yes' if fe <= oe else 'no':>12}")
+            print(f"{seq_len:>10,}  {rank:>5}  {te:>11.4f}  {oe:>10.4f}  {'yes' if te <= oe else 'no':>12}")
 
 
-def plot_frozen_reconstruction(frozen_err, oja_err, seq_lens, ranks, path="benchmark_frozen_reconstruction.pdf"):
+def plot_tkv_reconstruction(tkv_err, oja_err, seq_lens, ranks, path="benchmark_tkv_reconstruction.pdf"):
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
     ax = axes[0]
     for rank in ranks:
-        fe = [frozen_err[(t, rank)] for t in seq_lens]
+        te = [tkv_err[(t, rank)] for t in seq_lens]
         oe = [oja_err[(t, rank)] for t in seq_lens]
-        ax.plot(seq_lens, fe, marker="o", color="tomato", label=f"FrozenKV r={rank}")
+        ax.plot(seq_lens, te, marker="o", color="tomato", label=f"TKV r={rank}")
         ax.plot(seq_lens, oe, marker="s", linestyle="--", color="seagreen", label=f"OjaKV r={rank}")
     ax.set_xlabel("Sequence Length")
     ax.set_ylabel("Relative Frobenius Error")
-    ax.set_title("Frozen Basis vs OjaKV: Reconstruction Error")
+    ax.set_title("TKV vs OjaKV: Reconstruction Error")
     ax.set_yscale("log")
     ax.set_xscale("log")
     ax.legend(fontsize=7)
 
     ax = axes[1]
     for seq_len in seq_lens:
-        fe = [frozen_err[(seq_len, r)] for r in ranks]
-        ax.plot(ranks, fe, marker="o", label=f"t={seq_len:,}")
+        te = [tkv_err[(seq_len, r)] for r in ranks]
+        ax.plot(ranks, te, marker="o", label=f"t={seq_len:,}")
     ax.set_xlabel("Rank")
     ax.set_ylabel("Relative Frobenius Error")
-    ax.set_title("Frozen Basis Error vs Rank")
+    ax.set_title("TKV Error vs Rank")
     ax.set_yscale("log")
     ax.legend(fontsize=7)
 
@@ -1031,18 +1032,18 @@ def plot_frozen_reconstruction(frozen_err, oja_err, seq_lens, ranks, path="bench
     print(f"Saved {path}")
 
 
-def benchmark_frozen_perplexity(
+def benchmark_tkv_perplexity(
     pyramid_ranks=None,
     max_length=128,
     device="cpu",
 ):
     """
-    Perplexity comparison: exact GPT-2 vs Brand TKV (rank=16) vs frozen pyramid.
+    Perplexity comparison: exact GPT-2 vs BrandOnly (rank=16) vs TKV pyramid.
     """
     from model_hooks import (
         load_gpt2, compute_perplexity,
         patch_gpt2_for_compression, unpatch_gpt2,
-        patch_gpt2_frozen_basis, make_phi_for_gpt2, PYRAMID_RANKS,
+        patch_gpt2_tkv, make_phi_for_gpt2, PYRAMID_RANKS,
         patch_model_oja, unpatch_model,
     )
     if pyramid_ranks is None:
@@ -1054,28 +1055,28 @@ def benchmark_frozen_perplexity(
     ppl_exact = compute_perplexity(model, tokenizer, SAMPLE_TEXTS, max_length=max_length, device=device)
     print(f"  Exact perplexity:                      {ppl_exact:.2f}")
 
-    orig = patch_gpt2_frozen_basis(model, pyramid_ranks)
-    ppl_frozen = compute_perplexity(model, tokenizer, SAMPLE_TEXTS, max_length=max_length, device=device)
+    orig = patch_gpt2_tkv(model, pyramid_ranks)
+    ppl_tkv = compute_perplexity(model, tokenizer, SAMPLE_TEXTS, max_length=max_length, device=device)
     unpatch_gpt2(model, orig)
     avg_rank = sum(pyramid_ranks) // len(pyramid_ranks)
-    print(f"  Frozen pyramid (avg_rank={avg_rank}):        {ppl_frozen:.2f}  ratio={ppl_frozen/ppl_exact:.4f}")
+    print(f"  TKV pyramid (avg_rank={avg_rank}):           {ppl_tkv:.2f}  ratio={ppl_tkv/ppl_exact:.4f}")
 
     phi = make_phi_for_gpt2(16, 64)
     orig = patch_gpt2_for_compression(model, phi, 16, 512)
     ppl_brand = compute_perplexity(model, tokenizer, SAMPLE_TEXTS, max_length=max_length, device=device)
     unpatch_gpt2(model, orig)
-    print(f"  Brand TKV (uniform rank=16):           {ppl_brand:.2f}  ratio={ppl_brand/ppl_exact:.4f}")
+    print(f"  BrandOnly (uniform rank=16):           {ppl_brand:.2f}  ratio={ppl_brand/ppl_exact:.4f}")
 
     orig = patch_model_oja(model, pyramid_ranks)
     ppl_oja = compute_perplexity(model, tokenizer, SAMPLE_TEXTS, max_length=max_length, device=device)
     unpatch_model(model, orig)
     print(f"  OjaKV (pyramid):                       {ppl_oja:.2f}  ratio={ppl_oja/ppl_exact:.4f}")
 
-    return {"exact": ppl_exact, "frozen_pyramid": ppl_frozen, "brand_r16": ppl_brand, "oja": ppl_oja}
+    return {"exact": ppl_exact, "tkv_pyramid": ppl_tkv, "brand_r16": ppl_brand, "oja": ppl_oja}
 
 
 # ---------------------------------------------------------------------------
-# Sinked benchmark: full-precision sink+recent vs pure frozen
+# Sinked benchmark: full-precision sink+recent vs plain TKV
 # ---------------------------------------------------------------------------
 
 def benchmark_sinked(
@@ -1089,8 +1090,8 @@ def benchmark_sinked(
 ):
     """
     Compares three methods at each seq_len:
-      - frozen_only:  frozen-basis, all tokens compressed
-      - sinked:       full-precision sink+recent, frozen middle (StreamingLLM + ours)
+      - tkv_only: TKV (frozen-basis), all tokens compressed
+      - sinked:   full-precision sink+recent, TKV middle (StreamingLLM + ours)
 
     Also computes exact attention as the quality ceiling, and reports:
       - Reconstruction error on sink tokens (should be ~0 for sinked)
@@ -1109,14 +1110,14 @@ def benchmark_sinked(
         ref    = float(jnp.linalg.norm(K_true)) + 1e-9
         n_sink = min(sink_len, seq_len)
 
-        # Frozen only
-        state_f  = frozen_cold_start(K_true, V_true, rank, warmup_len=warmup_len)
-        K_f, _   = frozen_reconstruct(state_f)
-        err_f_sink  = float(jnp.linalg.norm(K_true[:n_sink] - K_f[:n_sink])) / ref
-        err_f_total = float(jnp.linalg.norm(K_true - K_f)) / ref
-        out_f = frozen_compressed_attention(Q, state_f, causal=True)
+        # TKV only
+        state_f  = tkv_cold_start(K_true, V_true, rank, warmup_len=warmup_len)
+        K_f, _   = tkv_reconstruct(state_f)
+        err_tkv_sink  = float(jnp.linalg.norm(K_true[:n_sink] - K_f[:n_sink])) / ref
+        err_tkv_total = float(jnp.linalg.norm(K_true - K_f)) / ref
+        out_f = tkv_compressed_attention(Q, state_f, causal=True)
 
-        # Sinked (sink + recent full precision, frozen middle)
+        # Sinked (sink + recent full precision, TKV middle)
         state_s  = sinked_cold_start(K_true, V_true, rank,
                                      sink_len=sink_len, window_len=window_len,
                                      warmup_len=warmup_len)
@@ -1125,7 +1126,7 @@ def benchmark_sinked(
         T_mid = state_s.middle.seq_len if state_s.middle else 0
         if T_mid > 0:
             assert state_s.middle is not None
-            K_mid, _ = frozen_reconstruct(state_s.middle)
+            K_mid, _ = tkv_reconstruct(state_s.middle)
             K_approx  = jnp.concatenate([
                 jnp.array(state_s.sink_k),
                 K_mid,
@@ -1139,18 +1140,18 @@ def benchmark_sinked(
         err_s_total = float(jnp.linalg.norm(K_true - K_approx)) / ref
         out_s = sinked_attention(Q, state_s, causal=True)
 
-        # Attention quality: relative output error vs frozen
+        # Attention quality: relative output error vs plain TKV
         attn_err = float(jnp.linalg.norm(out_s - out_f) / (jnp.linalg.norm(out_f) + 1e-9))
 
         # Memory: sinked adds 2 * (sink_len + window_len) * d full-precision floats per head
         extra_fp_mb = 4 * 2 * (n_sink + min(window_len, seq_len)) * d / 1e6
 
         results[seq_len] = {
-            "err_frozen_sink":  err_f_sink,
+            "err_tkv_sink":     err_tkv_sink,
             "err_sinked_sink":  err_s_sink,
-            "err_frozen_total": err_f_total,
+            "err_tkv_total":    err_tkv_total,
             "err_sinked_total": err_s_total,
-            "attn_err_vs_frozen": attn_err,
+            "attn_err_vs_tkv":  attn_err,
             "extra_fp_mb":      extra_fp_mb,
         }
 
@@ -1158,15 +1159,15 @@ def benchmark_sinked(
 
 
 def print_sinked_table(results, seq_lens):
-    print(f"\n{'T':>8}  {'frozen sink err':>16}  {'sinked sink err':>16}"
-          f"  {'frozen total':>13}  {'sinked total':>13}  {'attn diff':>10}  {'extra MB':>9}")
+    print(f"\n{'T':>8}  {'tkv sink err':>16}  {'sinked sink err':>16}"
+          f"  {'tkv total':>13}  {'sinked total':>13}  {'attn diff':>10}  {'extra MB':>9}")
     print("-" * 95)
     for t in seq_lens:
         r = results[t]
         print(
-            f"{t:>8,}  {r['err_frozen_sink']:>16.4f}  {r['err_sinked_sink']:>16.4f}"
-            f"  {r['err_frozen_total']:>13.4f}  {r['err_sinked_total']:>13.4f}"
-            f"  {r['attn_err_vs_frozen']:>10.4f}  {r['extra_fp_mb']:>8.3f}MB"
+            f"{t:>8,}  {r['err_tkv_sink']:>16.4f}  {r['err_sinked_sink']:>16.4f}"
+            f"  {r['err_tkv_total']:>13.4f}  {r['err_sinked_total']:>13.4f}"
+            f"  {r['attn_err_vs_tkv']:>10.4f}  {r['extra_fp_mb']:>8.3f}MB"
         )
 
 
@@ -1174,22 +1175,22 @@ def plot_sinked(results, seq_lens, path="benchmark_sinked.pdf"):
     fig, axes = plt.subplots(1, 2, figsize=(10, 4))
 
     ax = axes[0]
-    ax.plot(seq_lens, [results[t]["err_frozen_total"] for t in seq_lens],
-            marker="o", label="frozen only")
+    ax.plot(seq_lens, [results[t]["err_tkv_total"] for t in seq_lens],
+            marker="o", label="TKV only")
     ax.plot(seq_lens, [results[t]["err_sinked_total"] for t in seq_lens],
             marker="s", linestyle="--", label="sinked (ours)")
     ax.set_xlabel("Sequence Length")
     ax.set_ylabel("Relative Frobenius Error")
-    ax.set_title("Total Reconstruction Error: Frozen vs Sinked")
+    ax.set_title("Total Reconstruction Error: TKV vs Sinked")
     ax.set_yscale("log")
     ax.legend()
 
     ax = axes[1]
-    ax.plot(seq_lens, [results[t]["attn_err_vs_frozen"] for t in seq_lens],
+    ax.plot(seq_lens, [results[t]["attn_err_vs_tkv"] for t in seq_lens],
             marker="^", color="tomato")
     ax.set_xlabel("Sequence Length")
     ax.set_ylabel("Relative Attention Output Error")
-    ax.set_title("Sinked Attention Quality vs Frozen Basis")
+    ax.set_title("Sinked Attention Quality vs TKV Basis")
     ax.set_yscale("log")
 
     fig.tight_layout()
@@ -1199,10 +1200,10 @@ def plot_sinked(results, seq_lens, path="benchmark_sinked.pdf"):
 
 
 # ---------------------------------------------------------------------------
-# Metric 11: Frozen streaming decode vs OjaKV — per-token update time
+# Metric 11: TKV streaming decode vs OjaKV — per-token update time
 # ---------------------------------------------------------------------------
 
-def benchmark_frozen_streaming_vs_oja(
+def benchmark_tkv_streaming_vs_oja(
     warmup_len: int = 256,
     decode_len: int = 256,
     ranks=(8, 16, 32),
@@ -1212,11 +1213,11 @@ def benchmark_frozen_streaming_vs_oja(
     """
     Measures decode-phase per-token update time after a shared warmup.
 
-    Warmup: first warmup_len tokens processed by Brand (TKV-exact) or OjaKV.
+    Warmup: first warmup_len tokens processed by Brand (BrandOnly) or OjaKV.
     Decode: next decode_len tokens — only this phase is timed.
 
-    TKV-frozen uses init_frozen_streaming to pre-allocate the proj buffer,
-    then frozen_add_token writes in-place (O(R·d), no copy).  OjaKV still
+    TKV uses init_tkv_streaming to pre-allocate the proj buffer,
+    then tkv_add_token writes in-place (O(R·d), no copy).  OjaKV still
     runs QR on every decode token (O(R²·d)).
 
     Uses real K/V from GPT-2 small (layer 6, head 0) on WikiText-2.
@@ -1227,14 +1228,14 @@ def benchmark_frozen_streaming_vs_oja(
     K_decode, V_decode = K_real[warmup_len:], V_real[warmup_len:]
     K_all = jnp.concatenate([K_warm, K_decode], axis=0)
 
-    hdr = f"{'rank':>4}  {'TKV-exact':>12}  {'Frozen':>12}  {'OjaKV':>12}  frozen_err  oja_err"
-    print(f"\nFrozen Streaming vs OjaKV — warmup={warmup_len}, decode={decode_len} tokens")
+    hdr = f"{'rank':>4}  {'BrandOnly':>12}  {'TKV':>12}  {'OjaKV':>12}  tkv_err  oja_err"
+    print(f"\nTKV Streaming vs OjaKV — warmup={warmup_len}, decode={decode_len} tokens")
     print(hdr)
     print("-" * len(hdr))
 
     results = {}
     for rank in ranks:
-        # --- TKV-exact (decode phase only) ---
+        # --- BrandOnly (decode phase only) ---
         state_e = init_compressed_kv(T_max, rank, d)
         for i in range(warmup_len):
             state_e = append_token(state_e, K_warm[i], V_warm[i], rank)
@@ -1242,20 +1243,20 @@ def benchmark_frozen_streaming_vs_oja(
         for i in range(decode_len):
             state_e = append_token(state_e, K_decode[i], V_decode[i], rank)
         jax.block_until_ready(state_e.U_k)
-        ms_exact = (time.perf_counter() - t0) / decode_len * 1e3
+        ms_brand = (time.perf_counter() - t0) / decode_len * 1e3
 
-        # --- Frozen streaming (decode phase only) ---
+        # --- TKV streaming (decode phase only) ---
         state_b = init_compressed_kv(T_max, rank, d)
         for i in range(warmup_len):
             state_b = append_token(state_b, K_warm[i], V_warm[i], rank)
-        state_f = init_frozen_streaming(state_b, T_max)
+        state_tkv = init_tkv_streaming(state_b, T_max)
         t0 = time.perf_counter()
         for i in range(decode_len):
-            state_f = frozen_add_token(state_f, K_decode[i], V_decode[i])
-        ms_frozen = (time.perf_counter() - t0) / decode_len * 1e3
-        K_frec, _ = frozen_reconstruct(state_f)
-        frozen_err = float(
-            jnp.linalg.norm(K_all - K_frec[:warmup_len + decode_len])
+            state_tkv = tkv_add_token(state_tkv, K_decode[i], V_decode[i])
+        ms_tkv = (time.perf_counter() - t0) / decode_len * 1e3
+        K_trec, _ = tkv_reconstruct(state_tkv)
+        tkv_err = float(
+            jnp.linalg.norm(K_all - K_trec[:warmup_len + decode_len])
             / (jnp.linalg.norm(K_all) + 1e-9)
         )
 
@@ -1275,22 +1276,22 @@ def benchmark_frozen_streaming_vs_oja(
         )
 
         print(
-            f"{rank:4d}  {ms_exact:>10.3f}ms  {ms_frozen:>10.3f}ms  {ms_oja:>10.3f}ms"
-            f"  {frozen_err:.4f}      {oja_err:.4f}"
+            f"{rank:4d}  {ms_brand:>10.3f}ms  {ms_tkv:>10.3f}ms  {ms_oja:>10.3f}ms"
+            f"  {tkv_err:.4f}      {oja_err:.4f}"
         )
         results[rank] = {
-            "ms_exact": ms_exact, "ms_frozen": ms_frozen, "ms_oja": ms_oja,
-            "frozen_err": frozen_err, "oja_err": oja_err,
+            "ms_brand": ms_brand, "ms_tkv": ms_tkv, "ms_oja": ms_oja,
+            "tkv_err": tkv_err, "oja_err": oja_err,
         }
 
     return results
 
 
-def plot_frozen_streaming_vs_oja(results, ranks, path="benchmark_frozen_streaming.pdf"):
+def plot_tkv_streaming_vs_oja(results, ranks, path="benchmark_tkv_streaming.pdf"):
     fig, axes = plt.subplots(1, 2, figsize=(12, 4))
 
     ax = axes[0]
-    ax.plot(ranks, [results[r]["ms_frozen"] for r in ranks], marker="s", linestyle="--", color="tomato", label="FrozenKV")
+    ax.plot(ranks, [results[r]["ms_tkv"] for r in ranks], marker="s", linestyle="--", color="tomato", label="TKV")
     ax.plot(ranks, [results[r]["ms_oja"]    for r in ranks], marker="^", linestyle="-.", color="seagreen", label="OjaKV")
     ax.set_xlabel("Rank")
     ax.set_ylabel("Per-token update time (ms)")
@@ -1298,7 +1299,7 @@ def plot_frozen_streaming_vs_oja(results, ranks, path="benchmark_frozen_streamin
     ax.legend()
 
     ax = axes[1]
-    ax.plot(ranks, [results[r]["frozen_err"] for r in ranks], marker="s", linestyle="--", color="tomato", label="FrozenKV")
+    ax.plot(ranks, [results[r]["tkv_err"] for r in ranks], marker="s", linestyle="--", color="tomato", label="TKV")
     ax.plot(ranks, [results[r]["oja_err"]    for r in ranks], marker="^", linestyle="-.", color="seagreen", label="OjaKV")
     ax.set_xlabel("Rank")
     ax.set_ylabel("Relative Frobenius Error")
@@ -1313,26 +1314,26 @@ def plot_frozen_streaming_vs_oja(results, ranks, path="benchmark_frozen_streamin
 
 
 # ---------------------------------------------------------------------------
-# Summary: Frozen vs OjaKV head-to-head
+# Summary: TKV vs OjaKV head-to-head
 # ---------------------------------------------------------------------------
 
-def plot_head_to_head(ppl_results, streaming_results, frozen_err, oja_err,
+def plot_head_to_head(ppl_results, streaming_results, tkv_err, oja_err,
                       path="benchmark_head_to_head.pdf"):
     """
-    3-panel summary comparing Frozen (ours) vs OjaKV:
+    3-panel summary comparing TKV (ours) vs OjaKV:
       Left:   per-token decode time vs rank
       Center: reconstruction error vs context length (rank=16)
-      Right:  GPT-2 perplexity bar chart (exact / frozen / oja)
+      Right:  GPT-2 perplexity bar chart (exact / tkv / oja)
     """
     ranks = sorted(streaming_results.keys())
-    seq_lens = sorted({sl for sl, _ in frozen_err.keys()})
+    seq_lens = sorted({sl for sl, _ in tkv_err.keys()})
 
     fig, axes = plt.subplots(1, 3, figsize=(15, 4))
 
     # Left: per-token update time vs rank
     ax = axes[0]
-    ax.plot(ranks, [streaming_results[r]["ms_frozen"] for r in ranks],
-            marker="s", linestyle="--", color="tomato", label="FrozenKV")
+    ax.plot(ranks, [streaming_results[r]["ms_tkv"] for r in ranks],
+            marker="s", linestyle="--", color="tomato", label="TKV")
     ax.plot(ranks, [streaming_results[r]["ms_oja"] for r in ranks],
             marker="^", linestyle="-.", color="seagreen", label="OjaKV")
     ax.set_xlabel("Rank")
@@ -1342,8 +1343,8 @@ def plot_head_to_head(ppl_results, streaming_results, frozen_err, oja_err,
 
     # Center: reconstruction error vs context length at rank=16
     ax = axes[1]
-    ax.plot(seq_lens, [frozen_err[(sl, 16)] for sl in seq_lens],
-            marker="s", linestyle="--", color="tomato", label="FrozenKV")
+    ax.plot(seq_lens, [tkv_err[(sl, 16)] for sl in seq_lens],
+            marker="s", linestyle="--", color="tomato", label="TKV")
     ax.plot(seq_lens, [oja_err[(sl, 16)] for sl in seq_lens],
             marker="^", linestyle="-.", color="seagreen", label="OjaKV")
     ax.set_xlabel("Context Length (tokens)")
@@ -1353,10 +1354,10 @@ def plot_head_to_head(ppl_results, streaming_results, frozen_err, oja_err,
     ax.set_yscale("log")
     ax.legend()
 
-    # Right: GPT-2 perplexity bar chart (FrozenKV vs OjaKV + exact baseline)
+    # Right: GPT-2 perplexity bar chart (TKV vs OjaKV + exact baseline)
     ax = axes[2]
-    labels = ["Exact", "FrozenKV", "OjaKV"]
-    values = [ppl_results["exact"], ppl_results["frozen_pyramid"], ppl_results["oja"]]
+    labels = ["Exact", "TKV", "OjaKV"]
+    values = [ppl_results["exact"], ppl_results["tkv_pyramid"], ppl_results["oja"]]
     colors = ["steelblue", "tomato", "seagreen"]
     bars = ax.bar(labels, values, color=colors)
     ax.bar_label(bars, fmt="%.1f", padding=3)
@@ -1409,16 +1410,16 @@ if __name__ == "__main__":
 
     print()
     print("=" * 50)
-    print("Metric 4: TKV vs OjaKV Head-to-Head")
+    print("Metric 4: BrandOnly vs OjaKV Head-to-Head")
     print("=" * 50)
-    tkv_err, oja_err, tkv_time, oja_time = benchmark_tkv_vs_oja(SEQ_LENS, RANKS, D, T_MAX)
-    tkv_curve, oja_curve = benchmark_streaming_error(rank=16, seq_len=512, d=D, T_max=T_MAX)
-    plot_comparison(tkv_err, oja_err, tkv_time, oja_time, tkv_curve, oja_curve, SEQ_LENS, RANKS)
-    print_comparison_table(tkv_err, oja_err, tkv_time, oja_time, SEQ_LENS, RANKS)
+    brand_err, oja_err, brand_time, oja_time = benchmark_brand_vs_oja(SEQ_LENS, RANKS, D, T_MAX)
+    brand_curve, oja_curve = benchmark_streaming_error(rank=16, seq_len=512, d=D, T_max=T_MAX)
+    plot_comparison(brand_err, oja_err, brand_time, oja_time, brand_curve, oja_curve, SEQ_LENS, RANKS)
+    print_comparison_table(brand_err, oja_err, brand_time, oja_time, SEQ_LENS, RANKS)
 
     print()
     print("=" * 50)
-    print("Metric 4b: Multi-Layer/Head Comparison (TKV vs OjaKV)")
+    print("Metric 4b: Multi-Layer/Head Comparison (BrandOnly vs OjaKV)")
     print("=" * 50)
     benchmark_multi_head_comparison(
         layers=(0, 3, 6, 9, 11),
@@ -1431,7 +1432,7 @@ if __name__ == "__main__":
 
     print()
     print("=" * 50)
-    print("Metric 5: Lazy Flush Sweep (TKV vs OjaKV)")
+    print("Metric 5: Lazy Flush Sweep (BrandOnly vs OjaKV)")
     print("=" * 50)
     FLUSH_VALS = (1, 2, 4, 8)
     flush_results = benchmark_flush_sweep(
@@ -1458,7 +1459,7 @@ if __name__ == "__main__":
 
     print()
     print("=" * 50)
-    print("Metric 7: Hybrid Streaming (Brand warmup → Frozen long-context)")
+    print("Metric 7: Hybrid Streaming (Brand warmup → TKV long-context)")
     print("=" * 50)
     HYBRID_SEQ_LENS = (128, 512, 1_000, 4_000, 16_000)
     hybrid_results = benchmark_hybrid_streaming(
@@ -1469,32 +1470,32 @@ if __name__ == "__main__":
 
     print()
     print("=" * 50)
-    print("Metric 8: Frozen-Basis Memory vs OjaKV at 128K+")
+    print("Metric 8: TKV Memory vs OjaKV at 128K+")
     print("=" * 50)
     LONG_SEQ_LENS = (1_000, 8_000, 32_000, 128_000)
-    mem_frozen = benchmark_frozen_vs_oja_memory(LONG_SEQ_LENS, PYRAMID_RANKS_GPT2, uniform_rank=8, d=D)
-    print_frozen_memory_table(mem_frozen, LONG_SEQ_LENS)
+    mem_tkv = benchmark_tkv_vs_oja_memory(LONG_SEQ_LENS, PYRAMID_RANKS_GPT2, uniform_rank=8, d=D)
+    print_tkv_memory_table(mem_tkv, LONG_SEQ_LENS)
 
     print()
     print("=" * 50)
-    print("Metric 8: Frozen-Basis Reconstruction Error at Long Context")
+    print("Metric 8b: TKV Reconstruction Error at Long Context")
     print("=" * 50)
     LONG_SEQ_LENS_ERR = (1_000, 8_000, 32_000)
-    frozen_err, oja_err_long = benchmark_frozen_reconstruction(
+    tkv_err_long, oja_err_long = benchmark_tkv_reconstruction(
         seq_lens=LONG_SEQ_LENS_ERR, ranks=(4, 8, 16), warmup_len=512, d=D
     )
-    print_frozen_reconstruction_table(frozen_err, oja_err_long, LONG_SEQ_LENS_ERR, ranks=(4, 8, 16))
-    plot_frozen_reconstruction(frozen_err, oja_err_long, LONG_SEQ_LENS_ERR, ranks=(4, 8, 16))
+    print_tkv_reconstruction_table(tkv_err_long, oja_err_long, LONG_SEQ_LENS_ERR, ranks=(4, 8, 16))
+    plot_tkv_reconstruction(tkv_err_long, oja_err_long, LONG_SEQ_LENS_ERR, ranks=(4, 8, 16))
 
     print()
     print("=" * 50)
-    print("Metric 9: Frozen-Basis Perplexity on GPT-2")
+    print("Metric 9: TKV Perplexity on GPT-2")
     print("=" * 50)
-    ppl_frozen_results = benchmark_frozen_perplexity(pyramid_ranks=PYRAMID_RANKS_GPT2, max_length=128)
+    ppl_tkv_results = benchmark_tkv_perplexity(pyramid_ranks=PYRAMID_RANKS_GPT2, max_length=128)
 
     print()
     print("=" * 50)
-    print("Metric 10: Sinked (full-precision sink+recent) vs Frozen")
+    print("Metric 10: Sinked (full-precision sink+recent) vs TKV")
     print("=" * 50)
     sinked_results = benchmark_sinked(
         seq_lens=(256, 1_000, 4_000), rank=8,
@@ -1505,18 +1506,18 @@ if __name__ == "__main__":
 
     print()
     print("=" * 50)
-    print("Metric 11: Frozen Streaming vs OjaKV (Decode Phase)")
+    print("Metric 11: TKV Streaming vs OjaKV (Decode Phase)")
     print("=" * 50)
-    streaming_results = benchmark_frozen_streaming_vs_oja(
+    streaming_results = benchmark_tkv_streaming_vs_oja(
         warmup_len=256, decode_len=256, ranks=(8, 16, 32), d=D, T_max=T_MAX,
     )
-    plot_frozen_streaming_vs_oja(streaming_results, ranks=(8, 16, 32))
+    plot_tkv_streaming_vs_oja(streaming_results, ranks=(8, 16, 32))
 
     print()
     print("=" * 50)
-    print("Summary: Frozen vs OjaKV Head-to-Head")
+    print("Summary: TKV vs OjaKV Head-to-Head")
     print("=" * 50)
-    plot_head_to_head(ppl_frozen_results, streaming_results, frozen_err, oja_err_long)
+    plot_head_to_head(ppl_tkv_results, streaming_results, tkv_err_long, oja_err_long)
 
     print()
     print("All benchmarks complete.")

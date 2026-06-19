@@ -6,7 +6,7 @@ the generalized Oja rule (gradient ascent on explained variance) followed
 by QR re-orthonormalization.  Key/value vectors are stored as their
 projections onto the *current* basis at the time of insertion; the basis
 then rotates as new tokens arrive, so old projections become stale — the
-primary source of approximation error vs TKV's exact Brand update.
+primary source of approximation error vs BrandOnly's exact Brand update.
 
 Interface mirrors kv_state.py so benchmark.py can call both identically.
 """

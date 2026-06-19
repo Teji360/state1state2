@@ -366,28 +366,29 @@ def update_importance(
 
 
 # ---------------------------------------------------------------------------
-# Frozen-basis approach: O(R) per token, no stale projections, no T_max buffer
+# TKV: warmup-then-freeze approach — O(R) per token in the frozen phase,
+# no stale projections, no T_max buffer
 # ---------------------------------------------------------------------------
 
-class FrozenBasisState(NamedTuple):
-    basis_k: jnp.ndarray  # (R, d) — frozen key subspace, right singular vectors
-    basis_v: jnp.ndarray  # (R, d) — frozen value subspace, right singular vectors
+class TKVState(NamedTuple):
+    basis_k: jnp.ndarray  # (R, d) — TKV (frozen-phase) key subspace, right singular vectors
+    basis_v: jnp.ndarray  # (R, d) — TKV (frozen-phase) value subspace, right singular vectors
     proj_k:  np.ndarray   # (T, R) — projected keys in basis coordinates
     proj_v:  np.ndarray   # (T, R) — projected values in basis coordinates
     seq_len: int          # current number of tokens (plain Python int)
     rank:    int          # rank budget for this head/layer
 
 
-def brand_to_frozen(brand_state: CompressedKVState) -> "FrozenBasisState":
+def brand_to_tkv(brand_state: CompressedKVState) -> "TKVState":
     """
-    Lossless conversion from Brand's CompressedKVState to FrozenBasisState.
+    Lossless conversion from Brand's CompressedKVState to TKVState.
 
     The math: Brand stores K ≈ U·diag(sigma)·V, so for token t:
       k_t ≈ U[t] * sigma @ V  →  k_t @ V.T ≈ U[t] * sigma  (since V is orthonormal)
 
     So proj_k[t] = U_k[t] * sigma_k gives IDENTICAL attention scores to Brand's state:
       Brand:  (q @ V_k.T) * sigma_k @ U_k[t].T
-      Frozen: (q @ basis_k.T) @ proj_k[t]   ← same computation, just reorganised
+      TKV:    (q @ basis_k.T) @ proj_k[t]   ← same computation, just reorganised
 
     The transition is exact at warmup_len; after it new tokens are projected in O(R·d).
     """
@@ -401,7 +402,7 @@ def brand_to_frozen(brand_state: CompressedKVState) -> "FrozenBasisState":
     proj_k = np.array(brand_state.U_k[:T, :R] * brand_state.sigma_k[:R])  # (T, R)
     proj_v = np.array(brand_state.U_v[:T, :R] * brand_state.sigma_v[:R])  # (T, R)
 
-    return FrozenBasisState(
+    return TKVState(
         basis_k=basis_k,
         basis_v=basis_v,
         proj_k=proj_k,
@@ -411,16 +412,16 @@ def brand_to_frozen(brand_state: CompressedKVState) -> "FrozenBasisState":
     )
 
 
-def init_frozen_streaming(
+def init_tkv_streaming(
     brand_state: CompressedKVState,
     T_max: int,
-) -> FrozenBasisState:
+) -> TKVState:
     """
-    Convert a Brand warmup state into a pre-allocated FrozenBasisState.
+    Convert a Brand warmup state into a pre-allocated TKVState.
 
-    Pre-allocates (T_max, R) numpy buffers so frozen_add_token can write
+    Pre-allocates (T_max, R) numpy buffers so tkv_add_token can write
     in-place (O(R·d) per token, no copy). Use after Brand warmup to get
-    a fixed basis, then call frozen_add_token for all decode tokens.
+    a fixed basis, then call tkv_add_token for all decode tokens.
     """
     T = int(brand_state.seq_len)
     R = int(brand_state.active_rank)
@@ -428,7 +429,7 @@ def init_frozen_streaming(
     proj_v = np.zeros((T_max, R), dtype=np.float32)
     proj_k[:T] = np.array(brand_state.U_k[:T, :R] * brand_state.sigma_k[:R])
     proj_v[:T] = np.array(brand_state.U_v[:T, :R] * brand_state.sigma_v[:R])
-    return FrozenBasisState(
+    return TKVState(
         basis_k=brand_state.V_k[:R],
         basis_v=brand_state.V_v[:R],
         proj_k=proj_k,
@@ -439,7 +440,7 @@ def init_frozen_streaming(
 
 
 def hybrid_append_token(
-    state,                       # CompressedKVState (warmup) or FrozenBasisState (streaming)
+    state,                       # CompressedKVState (warmup) or TKVState (post-freeze)
     k_new: jnp.ndarray,          # (d,)
     v_new: jnp.ndarray,          # (d,)
     R_max: int,
@@ -447,40 +448,40 @@ def hybrid_append_token(
     eps: float = 0.01,
 ):
     """
-    Hybrid online KV update: Brand's exact SVD during warmup, frozen projection after.
+    Hybrid online KV update: Brand's exact SVD during warmup, TKV frozen projection after.
 
     Phase 1 (seq_len < warmup_len): Brand rank-1 update — O(R³) per token.
       Tracks the exact singular subspace as the sequence grows. Builds the
-      best possible basis for the frozen phase.
+      best possible basis for the freeze phase.
 
-    Phase 2 (seq_len >= warmup_len): Converts Brand state → FrozenBasisState
-      (lossless, then frozen_add_token for all future tokens — O(R·d) per token.
+    Phase 2 (seq_len >= warmup_len): Converts Brand state → TKVState
+      (lossless, then tkv_add_token for all future tokens — O(R·d) per token.
       No U-rotation cost, no stale projections, no T_max pre-allocation.
 
-    Returns: CompressedKVState (during warmup) or FrozenBasisState (after).
+    Returns: CompressedKVState (during warmup) or TKVState (after).
     """
-    if isinstance(state, FrozenBasisState):
-        return frozen_add_token(state, k_new, v_new)
+    if isinstance(state, TKVState):
+        return tkv_add_token(state, k_new, v_new)
 
     new_brand = append_token(state, k_new, v_new, R_max, eps=eps)
     if int(new_brand.seq_len) >= warmup_len:
-        return brand_to_frozen(new_brand)
+        return brand_to_tkv(new_brand)
     return new_brand
 
 
-def frozen_cold_start(
+def tkv_cold_start(
     K: jnp.ndarray,
     V_mat: jnp.ndarray,
     rank: int,
     warmup_len: int = 512,
-) -> FrozenBasisState:
+) -> TKVState:
     """
-    Establish a frozen low-rank basis from the first min(T, warmup_len) tokens,
-    then project all T tokens onto it. O(warmup_len * d²) for SVD + O(T * R * d)
-    for projection.
+    Establish TKV's frozen-phase low-rank basis from the first min(T, warmup_len)
+    tokens, then project all T tokens onto it. O(warmup_len * d²) for SVD +
+    O(T * R * d) for projection.
 
     Using warmup_len << T means the SVD cost is bounded regardless of context length.
-    After warmup, new tokens are projected in O(R * d) via frozen_add_token.
+    After warmup, new tokens are projected in O(R * d) via tkv_add_token.
     """
     T, d = K.shape
     w = min(T, warmup_len)
@@ -497,7 +498,7 @@ def frozen_cold_start(
     proj_k = np.array(K @ basis_k.T)     # (T, R)
     proj_v = np.array(V_mat @ basis_v.T)  # (T, R)
 
-    return FrozenBasisState(
+    return TKVState(
         basis_k=basis_k,
         basis_v=basis_v,
         proj_k=proj_k,
@@ -507,18 +508,18 @@ def frozen_cold_start(
     )
 
 
-def frozen_add_token(
-    state: FrozenBasisState,
+def tkv_add_token(
+    state: TKVState,
     k_new: jnp.ndarray,  # (d,)
     v_new: jnp.ndarray,  # (d,)
-) -> FrozenBasisState:
+) -> TKVState:
     """
-    Project a new token onto the frozen basis. O(R * d) per token.
+    Project a new token onto the frozen TKV basis. O(R * d) per token.
     Basis never changes — no stale projection problem.
 
-    When state was created by init_frozen_streaming (proj_k pre-allocated with
+    When state was created by init_tkv_streaming (proj_k pre-allocated with
     extra capacity), writes in-place — no array copy. Falls back to np.vstack
-    for tight-fit states from frozen_cold_start / brand_to_frozen.
+    for tight-fit states from tkv_cold_start / brand_to_tkv.
     """
     c_k = np.array(k_new @ state.basis_k.T)[None, :]  # (1, R)
     c_v = np.array(v_new @ state.basis_v.T)[None, :]  # (1, R)
@@ -527,7 +528,7 @@ def frozen_add_token(
         state.proj_k[t] = c_k
         state.proj_v[t] = c_v
         return state._replace(seq_len=t + 1)
-    return FrozenBasisState(
+    return TKVState(
         basis_k=state.basis_k,
         basis_v=state.basis_v,
         proj_k=np.vstack([state.proj_k, c_k]),
@@ -537,8 +538,8 @@ def frozen_add_token(
     )
 
 
-def frozen_reconstruct(
-    state: FrozenBasisState,
+def tkv_reconstruct(
+    state: TKVState,
 ) -> Tuple[jnp.ndarray, jnp.ndarray]:
     """Reconstruct K and V from compressed form. For benchmarking only."""
     proj_k = jnp.array(state.proj_k)  # (T, R)
@@ -547,7 +548,7 @@ def frozen_reconstruct(
 
 
 # ---------------------------------------------------------------------------
-# Sinked KV: full-precision sink + recent, frozen-basis middle
+# Sinked KV: full-precision sink + recent, TKV (frozen-basis) middle
 # Attention sink concept from StreamingLLM (Xiao et al., 2023) arXiv:2309.17453
 # ---------------------------------------------------------------------------
 
@@ -555,7 +556,7 @@ def frozen_reconstruct(
 class SinkedKVState:
     sink_k:    np.ndarray  # (n_sink, d)  — first K tokens, full precision
     sink_v:    np.ndarray  # (n_sink, d)
-    middle:    Optional["FrozenBasisState"]  # compressed intermediate tokens, None when T is short
+    middle:    Optional["TKVState"]  # compressed intermediate tokens, None when T is short
     recent_k:  np.ndarray  # (n_recent, d) — last K tokens, full precision
     recent_v:  np.ndarray  # (n_recent, d)
     sink_len:  int         # actual number of sink tokens stored
@@ -575,7 +576,7 @@ def sinked_cold_start(
     """
     Partition the KV cache into three segments:
       - Sink    (first sink_len tokens):   full precision — attention sinks per StreamingLLM
-      - Middle  (tokens in between):       frozen-basis compressed
+      - Middle  (tokens in between):       TKV-compressed
       - Recent  (last window_len tokens):  full precision — recency critical for generation
 
     When T <= sink_len + window_len there is no middle; everything stays full precision.
@@ -593,7 +594,7 @@ def sinked_cold_start(
     if T_mid > 0:
         K_mid  = K[n_sink : n_sink + T_mid]
         V_mid  = V_mat[n_sink : n_sink + T_mid]
-        middle = frozen_cold_start(K_mid, V_mid, rank, warmup_len=warmup_len)
+        middle = tkv_cold_start(K_mid, V_mid, rank, warmup_len=warmup_len)
     else:
         middle = None
 
@@ -626,7 +627,7 @@ def sinked_add_token(
     on the first eviction) and the new token takes its place at the end.
 
     rank is only used when the middle is None and must be initialised from a
-    single evicted token — subsequent additions use frozen_add_token, which is O(R·d).
+    single evicted token — subsequent additions use tkv_add_token, which is O(R·d).
     """
     k_np = np.array(k_new)
     v_np = np.array(v_new)
@@ -649,9 +650,9 @@ def sinked_add_token(
     evicted_v = jnp.array(state.recent_v[0])
 
     if state.middle is None:
-        middle = frozen_cold_start(evicted_k[None, :], evicted_v[None, :], rank)
+        middle = tkv_cold_start(evicted_k[None, :], evicted_v[None, :], rank)
     else:
-        middle = frozen_add_token(state.middle, evicted_k, evicted_v)
+        middle = tkv_add_token(state.middle, evicted_k, evicted_v)
 
     return SinkedKVState(
         sink_k=state.sink_k,
@@ -710,19 +711,19 @@ if __name__ == "__main__":
 
     print("kv_state.py: all checks passed")
 
-    # --- Test 4: frozen_cold_start — reconstruction and add_token ---
-    state_fr = frozen_cold_start(K_true, V_true, R_MAX, warmup_len=N)
-    K_fr, _ = frozen_reconstruct(state_fr)
-    err_fr = jnp.linalg.norm(K_true - K_fr) / jnp.linalg.norm(K_true)
-    print(f"Test 4 — frozen cold_start rel error: {err_fr:.4f}")
-    assert err_fr < 0.5, f"Frozen cold_start regression: {err_fr:.4f}"
+    # --- Test 4: tkv_cold_start — reconstruction and add_token ---
+    state_tkv = tkv_cold_start(K_true, V_true, R_MAX, warmup_len=N)
+    K_tkv, _ = tkv_reconstruct(state_tkv)
+    err_tkv = jnp.linalg.norm(K_true - K_tkv) / jnp.linalg.norm(K_true)
+    print(f"Test 4 — TKV cold_start rel error: {err_tkv:.4f}")
+    assert err_tkv < 0.5, f"TKV cold_start regression: {err_tkv:.4f}"
 
     # add one extra token and verify shape grows correctly
     k_extra = jax.random.normal(jax.random.PRNGKey(10), (D,))
     v_extra = jax.random.normal(jax.random.PRNGKey(11), (D,))
-    state_fr2 = frozen_add_token(state_fr, k_extra, v_extra)
-    assert state_fr2.seq_len == N + 1, "frozen_add_token seq_len wrong"
-    assert state_fr2.proj_k.shape == (N + 1, state_fr2.rank), "frozen_add_token shape wrong"
-    print(f"Test 4 passed  — frozen add_token OK, seq_len={state_fr2.seq_len}")
+    state_tkv2 = tkv_add_token(state_tkv, k_extra, v_extra)
+    assert state_tkv2.seq_len == N + 1, "tkv_add_token seq_len wrong"
+    assert state_tkv2.proj_k.shape == (N + 1, state_tkv2.rank), "tkv_add_token shape wrong"
+    print(f"Test 4 passed  — TKV add_token OK, seq_len={state_tkv2.seq_len}")
 
-    print("kv_state.py: all frozen checks passed")
+    print("kv_state.py: all TKV checks passed")

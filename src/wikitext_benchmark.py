@@ -178,7 +178,7 @@ def print_ppl_table(results: dict, context_lens: List[int]):
 def plot_ppl_results(results: dict, context_lens: List[int], path: str = "wikitext_perplexity.pdf"):
     colors  = {"sinked": "tomato", "oja": "seagreen"}
     markers = {"sinked": "s",      "oja": "^"}
-    labels  = {"sinked": "FrozenKV", "oja": "OjaKV"}
+    labels  = {"sinked": "TKV+Sink", "oja": "OjaKV"}
 
     fig, ax = plt.subplots(figsize=(7, 4))
     for method in ("sinked", "oja"):

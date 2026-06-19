@@ -12,7 +12,7 @@ import numpy as np
 from kv_state import (
     sinked_cold_start,
     sinked_add_token,
-    frozen_reconstruct,
+    tkv_reconstruct,
 )
 from loop import JaxTensorSketchStore, sketch_cold_start
 from attention import sinked_attention
