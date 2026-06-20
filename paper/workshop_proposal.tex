@@ -197,29 +197,40 @@ that these axes separate the two methods cleanly:
 \begin{itemize}[nosep,leftmargin=1.5em]
   \item \textbf{Per-token decode latency.}  After a shared warmup of 256 tokens,
     TKV processes each new decode token in $0.17$--$0.18$\,ms (rank $8$--$32$),
-    versus $0.45$--$0.56$\,ms for OjaKV---a $2.5$--$3.2\times$ speedup that is
+    versus $0.46$--$0.55$\,ms for OjaKV---a $2.5$--$3.1\times$ speedup that is
     \emph{flat across ranks} because the frozen projection cost is $O(Rd)$
     independent of the SVD update schedule.
   \item \textbf{Reconstruction error (real activations).}  OjaKV's relative
-    Frobenius error exceeds $1.2$ at every rank tested (rank $8$--$32$,
-    $T{=}512$\,tokens of decode), meaning its reconstruction is worse than the
-    zero matrix---direct evidence of stale-basis collapse.  TKV's error
-    is $0.27$--$0.44$ over the same range, $3$--$4.5\times$ lower.  At long
-    context ($T{=}32$K, rank $16$) TKV achieves $0.55$ versus OjaKV's $0.63$.
+    Frobenius error is $\approx 1.2$ at every rank tested (rank $8$--$32$,
+    $T{=}512$\,tokens of decode), meaning its reconstruction is about as bad as
+    the zero matrix---direct evidence of stale-basis collapse.  TKV's error
+    is $0.27$--$0.44$ over the same range, $2.7$--$4.4\times$ lower.  A separate
+    sweep on \emph{synthetic} long-context data (not real activations) shows the
+    same pattern holding out to $T{=}32$K: TKV $0.55$ versus OjaKV's $0.63$ at
+    rank~$16$.
   \item \textbf{Memory at scale.}  At $T{=}128$K tokens the full float32 KV cache
     requires $9.44$\,GB; a TKV pyramid basis compresses this to $2.21$\,GB
     ($4.3\times$) while beating OjaKV on reconstruction error at every long-context
-    length tested ($1$K--$32$K).
+    length tested ($1$K--$32$K, synthetic data).
   \item \textbf{End-task perplexity (GPT-2).}  TKV (average rank $15$
     pyramid) achieves perplexity $89.6$ versus $129.6$ for the exact cache (ratio
-    $0.69$)---the frozen basis acts as a mild regularizer and \emph{improves}
-    held-out perplexity.  OjaKV under the same pyramid schedule achieves $756.2$
-    (ratio $5.83\times$ worse than exact), confirming that stale-basis error
-    compounds into catastrophic language-model degradation.
+    $0.69$)---on this 117M-parameter model the frozen basis acts as a mild
+    regularizer and \emph{improves} held-out perplexity.  Follow-up work on a
+    7B-parameter model suggests this specific improvement does not generalize:
+    there, TKV lands $3.6\%$ \emph{above} exact rather than below it, though
+    still far closer to exact than OjaKV.  OjaKV under the same pyramid schedule
+    achieves $756.2$ (ratio $5.83\times$ worse than exact at this scale, rising
+    to $60\times$ worse on the 7B model), confirming that stale-basis error
+    compounds into catastrophic language-model degradation that worsens with
+    scale.
   \item \textbf{Long-context perplexity (TinyLlama-1.1B, WikiText-2).}
     In a sliding-window evaluation at context lengths $512$--$2048$ tokens,
-    TKV perplexity ranges from $36$ to $658$ while OjaKV degrades to
-    $932$--$1795$, consistent with the stale-basis collapse observed above.
+    \textbf{TKV+Sink} (full-precision sink and recent window, with the middle
+    segment TKV-compressed) achieves perplexity ranging from $36$ to $658$
+    while OjaKV degrades to $932$--$1795$, consistent with the stale-basis
+    collapse observed above.  This sink+TKV composition is a distinct
+    configuration from the plain-TKV results above; a full evaluation of it is
+    ongoing work.
 \end{itemize}
 
 These numbers are a single-workstation pilot, not a leaderboard; their purpose is
@@ -264,8 +275,8 @@ language models, with a current focus on online KV cache compression.  His recen
 work introduces \textbf{TKV}, a streaming KV compression method that computes
 an EYM-optimal low-rank basis during prefill (via Brand's rank-1 SVD update and
 Halko randomized range finding) and freezes the basis for the autoregressive decode
-phase---exploiting the structure of conditional generation to achieve $2.5$--$3.2\times$
-lower per-token latency than OjaKV with $3$--$4.5\times$ lower reconstruction error.
+phase---exploiting the structure of conditional generation to achieve $2.5$--$3.1\times$
+lower per-token latency than OjaKV with $2.7$--$4.4\times$ lower reconstruction error.
 He has experience running small research communities and organizing reading groups
 on efficient ML.  He is not submitting any other workshop proposals to NeurIPS 2026.
 
