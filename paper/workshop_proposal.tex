@@ -67,7 +67,7 @@ A critical gap is the absence of a venue where theoreticians who study
 low-rank matrix approximation, practitioners deploying at scale, and
 systems researchers building inference kernels can exchange ideas in real time.
 Recent arXiv activity (OjaKV, SVDq, xKV, KVTC, KQ-SVD, StreamingLLM, SnapKV,
-PyramidKV, MagicPIG, FrozenKV) reflects a field that is generating results faster
+PyramidKV, MagicPIG) reflects a field that is generating results faster
 than the community can synthesize them.
 
 \textbf{Why now?} Three developments make 2026 the right moment:
@@ -176,12 +176,12 @@ To validate that the shared protocol in item~(1) above is measurable and
 discriminative, the organizers ran a pilot sweep on a single commodity
 workstation using GPT-2-small key/value activations extracted from WikiText-2.
 The pilot compares two streaming compression methods head-to-head:
-\textbf{FrozenKV}, a novel warmup-then-freeze approach that computes an
+\textbf{TKV}, a novel warmup-then-freeze approach that computes an
 EYM-optimal SVD basis during prefill and freezes it for the decode phase, and
 \textbf{OjaKV}~\cite{ojakov2025}, the current state-of-the-art online baseline
 based on Oja's streaming rule.
 
-The key insight behind FrozenKV is that autoregressive decode tokens are
+The key insight behind TKV is that autoregressive decode tokens are
 generated \emph{conditioned on} the prefill context and therefore tend to remain
 within the subspace already spanned by prefill activations.  Freezing the
 SVD basis after warmup exploits this structure: the prefill establishes an
@@ -196,21 +196,21 @@ that these axes separate the two methods cleanly:
 
 \begin{itemize}[nosep,leftmargin=1.5em]
   \item \textbf{Per-token decode latency.}  After a shared warmup of 256 tokens,
-    FrozenKV processes each new decode token in $0.17$--$0.18$\,ms (rank $8$--$32$),
+    TKV processes each new decode token in $0.17$--$0.18$\,ms (rank $8$--$32$),
     versus $0.45$--$0.56$\,ms for OjaKV---a $2.5$--$3.2\times$ speedup that is
     \emph{flat across ranks} because the frozen projection cost is $O(Rd)$
     independent of the SVD update schedule.
   \item \textbf{Reconstruction error (real activations).}  OjaKV's relative
     Frobenius error exceeds $1.2$ at every rank tested (rank $8$--$32$,
     $T{=}512$\,tokens of decode), meaning its reconstruction is worse than the
-    zero matrix---direct evidence of stale-basis collapse.  FrozenKV's error
+    zero matrix---direct evidence of stale-basis collapse.  TKV's error
     is $0.27$--$0.44$ over the same range, $3$--$4.5\times$ lower.  At long
-    context ($T{=}32$K, rank $16$) FrozenKV achieves $0.55$ versus OjaKV's $0.63$.
+    context ($T{=}32$K, rank $16$) TKV achieves $0.55$ versus OjaKV's $0.63$.
   \item \textbf{Memory at scale.}  At $T{=}128$K tokens the full float32 KV cache
-    requires $9.44$\,GB; a FrozenKV pyramid basis compresses this to $2.21$\,GB
+    requires $9.44$\,GB; a TKV pyramid basis compresses this to $2.21$\,GB
     ($4.3\times$) while beating OjaKV on reconstruction error at every long-context
     length tested ($1$K--$32$K).
-  \item \textbf{End-task perplexity (GPT-2).}  FrozenKV (average rank $15$
+  \item \textbf{End-task perplexity (GPT-2).}  TKV (average rank $15$
     pyramid) achieves perplexity $89.6$ versus $129.6$ for the exact cache (ratio
     $0.69$)---the frozen basis acts as a mild regularizer and \emph{improves}
     held-out perplexity.  OjaKV under the same pyramid schedule achieves $756.2$
@@ -218,7 +218,7 @@ that these axes separate the two methods cleanly:
     compounds into catastrophic language-model degradation.
   \item \textbf{Long-context perplexity (TinyLlama-1.1B, WikiText-2).}
     In a sliding-window evaluation at context lengths $512$--$2048$ tokens,
-    FrozenKV perplexity ranges from $36$ to $658$ while OjaKV degrades to
+    TKV perplexity ranges from $36$ to $658$ while OjaKV degrades to
     $932$--$1795$, consistent with the stale-basis collapse observed above.
 \end{itemize}
 
@@ -261,7 +261,7 @@ Accept/reject notification will be issued by \textbf{September 29, 2026} at the 
 
 David Aror is an independent researcher working on efficient inference for large
 language models, with a current focus on online KV cache compression.  His recent
-work introduces \textbf{FrozenKV}, a streaming KV compression method that computes
+work introduces \textbf{TKV}, a streaming KV compression method that computes
 an EYM-optimal low-rank basis during prefill (via Brand's rank-1 SVD update and
 Halko randomized range finding) and freezes the basis for the autoregressive decode
 phase---exploiting the structure of conditional generation to achieve $2.5$--$3.2\times$

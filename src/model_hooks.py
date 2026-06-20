@@ -651,6 +651,114 @@ def patch_model_tkv_flat(model, rank: int, key: str = "tkv_flat") -> str:
     return original
 
 
+def _make_generic_halko_fn(phi: jnp.ndarray, rank: int, T_max: int):
+    """
+    GQA-aware Halko-cold-start hook: one SVD per KV head per forward call,
+    no streaming. Generalizes _make_compressed_attn_fn for GQA models.
+    """
+    def _attn(
+        module,
+        query: torch.Tensor,   # (batch, n_q_heads, seq_len, head_dim)
+        key: torch.Tensor,     # (batch, n_kv_heads, seq_len, head_dim)
+        value: torch.Tensor,
+        attention_mask=None,
+        scaling=None,
+        dropout: float = 0.0,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, None]:
+        batch, n_kv_heads, _, head_dim = key.shape
+        n_q_heads = query.shape[1]
+        groups = n_q_heads // n_kv_heads
+        device = query.device
+        dtype = query.dtype
+
+        out_heads = []
+        for b in range(batch):
+            out_b = []
+            for kv_h in range(n_kv_heads):
+                k_h = torch_to_jax(key[b, kv_h])
+                v_h = torch_to_jax(value[b, kv_h])
+                state = cold_start(k_h, v_h, phi, rank, T_max, head_dim)
+                for g in range(groups):
+                    q_h = torch_to_jax(query[b, kv_h * groups + g])
+                    out_h, _ = compressed_attention_with_weights(q_h, state, T_max, causal=True)
+                    out_b.append(jax_to_torch(out_h, device).to(dtype))
+            out_heads.append(torch.stack(out_b, dim=0))
+
+        return torch.stack(out_heads, dim=0).transpose(1, 2), None
+
+    return _attn
+
+
+def patch_model_halko_cold_start(model, phi: jnp.ndarray, rank: int, T_max: int, key: str = "halko_gqa") -> str:
+    """
+    Generic Halko-cold-start patch (single SVD per forward call, no
+    streaming) for any GQA model. Generalizes patch_gpt2_for_compression.
+    Returns original _attn_implementation for restoration.
+    """
+    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+    ALL_ATTENTION_FUNCTIONS.register(key, _make_generic_halko_fn(phi, rank, T_max))
+    original = model.config._attn_implementation
+    model.config._attn_implementation = key
+    return original
+
+
+def _make_generic_tkv_pyramid_fn(pyramid_ranks):
+    """
+    GQA-aware TKV (warmup-then-freeze) hook with a per-layer rank budget.
+    Generalizes _make_tkv_pyramid_fn for GQA models.
+    """
+    def _attn(
+        module,
+        query: torch.Tensor,   # (batch, n_q_heads, seq_len, head_dim)
+        key: torch.Tensor,     # (batch, n_kv_heads, seq_len, head_dim)
+        value: torch.Tensor,
+        attention_mask=None,
+        scaling=None,
+        dropout: float = 0.0,
+        **kwargs,
+    ) -> Tuple[torch.Tensor, None]:
+        layer_idx = getattr(module, "layer_idx", 0)
+        rank = pyramid_ranks[min(layer_idx, len(pyramid_ranks) - 1)]
+        batch, n_kv_heads, _, _ = key.shape
+        n_q_heads = query.shape[1]
+        groups = n_q_heads // n_kv_heads
+        device = query.device
+        dtype = query.dtype
+
+        out_heads = []
+        for b in range(batch):
+            out_b = []
+            for kv_h in range(n_kv_heads):
+                k_h = torch_to_jax(key[b, kv_h])
+                v_h = torch_to_jax(value[b, kv_h])
+                state = tkv_cold_start(k_h, v_h, rank)
+                for g in range(groups):
+                    q_h = torch_to_jax(query[b, kv_h * groups + g])
+                    out_h = tkv_compressed_attention(q_h, state, causal=True)
+                    out_b.append(jax_to_torch(out_h, device).to(dtype))
+            out_heads.append(torch.stack(out_b, dim=0))
+
+        return torch.stack(out_heads, dim=0).transpose(1, 2), None
+
+    return _attn
+
+
+def patch_model_tkv_pyramid(model, pyramid_ranks=None, key: str = "tkv_pyramid_gqa") -> str:
+    """
+    Generic TKV pyramid-rank patch for any GQA model. Generalizes
+    patch_gpt2_tkv. pyramid_ranks defaults to _default_pyramid(num_hidden_layers).
+    """
+    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+    if pyramid_ranks is None:
+        n_layers = getattr(model.config, "num_hidden_layers", 12)
+        pyramid_ranks = _default_pyramid(n_layers)
+    ALL_ATTENTION_FUNCTIONS.register(key, _make_generic_tkv_pyramid_fn(pyramid_ranks))
+    original = model.config._attn_implementation
+    model.config._attn_implementation = key
+    return original
+
+
 def _default_pyramid(n_layers: int) -> List[int]:
     """Divide layers into 4 equal quartiles with ranks [32,16,8,4]."""
     q = n_layers // 4
@@ -720,11 +828,84 @@ def load_gpt2(device: str = "cpu"):
     return model, tokenizer
 
 
-def make_phi_for_gpt2(rank: int, head_dim: int = 64, seed: int = 42) -> jnp.ndarray:
+def make_phi(rank: int, head_dim: int, seed: int = 42) -> jnp.ndarray:
     """He-like random sketch matching JaxTensorSketchStore's Phi_init."""
     key = jax.random.PRNGKey(seed)
     stddev = jnp.sqrt(2.0 / head_dim)
     return jax.random.normal(key, (rank, head_dim)) * stddev
+
+
+def make_phi_for_gpt2(rank: int, head_dim: int = 64, seed: int = 42) -> jnp.ndarray:
+    """Back-compat alias for make_phi (no GPT-2-specific logic)."""
+    return make_phi(rank, head_dim, seed)
+
+
+def extract_real_kv_generic(
+    model,
+    tokenizer,
+    max_seq_len: int = 512,
+    layer_idx: int = 16,
+    kv_head_idx: int = 0,
+    device: str = "cpu",
+    text: Optional[str] = None,
+):
+    """
+    Capture real K/V activations (pre-GQA-expansion) from any model via the
+    generic ALL_ATTENTION_FUNCTIONS registry, on a WikiText-2 passage (or
+    supplied text).
+
+    Runs a single forward pass with a lightweight capture hook that passes
+    through exact attention (via SDPA's enable_gqa) for every layer so
+    downstream activations stay correct, and only captures key/value at
+    layer_idx.
+
+    For GQA models, key/value arrive pre-expansion with shape
+    (batch, num_key_value_heads, seq_len, head_dim) — kv_head_idx must be in
+    [0, num_key_value_heads).
+
+    Returns (K, V) as JAX arrays of shape (max_seq_len, head_dim).
+    """
+    import torch.nn.functional as F
+    from transformers.modeling_utils import ALL_ATTENTION_FUNCTIONS
+    from datasets import load_dataset
+
+    n_kv_heads = getattr(model.config, "num_key_value_heads", model.config.num_attention_heads)
+    if not (0 <= kv_head_idx < n_kv_heads):
+        raise ValueError(f"kv_head_idx={kv_head_idx} out of range for num_key_value_heads={n_kv_heads}")
+
+    if text is None:
+        ds = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split="test")
+        text = " ".join(t for t in ds["text"] if t.strip())
+    ids = tokenizer.encode(text, return_tensors="pt")[:, :max_seq_len].to(device)
+
+    captured = {}
+    call_count = [0]
+
+    def _capture_fn(module, query, key, value, attention_mask=None, scaling=None, dropout=0.0, **kwargs):
+        layer = call_count[0]
+        call_count[0] += 1
+        if layer == layer_idx:
+            captured["k"] = key[0, kv_head_idx].detach().float().cpu()
+            captured["v"] = value[0, kv_head_idx].detach().float().cpu()
+        scale = scaling if scaling is not None else query.shape[-1] ** -0.5
+        out = F.scaled_dot_product_attention(
+            query, key, value, scale=scale, is_causal=True, enable_gqa=True
+        )
+        return out.transpose(1, 2), None  # (batch, seq_len, heads, head_dim)
+
+    IMPL_KEY = "_kv_capture_generic"
+    ALL_ATTENTION_FUNCTIONS.register(IMPL_KEY, _capture_fn)
+    orig_impl = model.config._attn_implementation
+    model.config._attn_implementation = IMPL_KEY
+
+    with torch.no_grad():
+        model(ids, use_cache=False)
+
+    model.config._attn_implementation = orig_impl
+
+    K = jnp.array(captured["k"].numpy())  # (max_seq_len, head_dim)
+    V = jnp.array(captured["v"].numpy())
+    return K, V
 
 
 # --- Smoke test ---

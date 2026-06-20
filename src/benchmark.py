@@ -3,7 +3,7 @@ Three benchmark metrics for the NeurIPS workshop paper:
 
   1. Reconstruction error  — ||K - K_r||_F / ||K||_F vs rank & seq_len
   2. Memory compression ratio — theoretical bytes saved vs rank
-  3. Perplexity on short texts vs rank — measured on GPT-2 small
+  3. Perplexity on short texts vs rank — measured on Mistral-7B
 
 Run: python benchmark.py
 Outputs: benchmark_reconstruction.pdf, benchmark_memory.pdf, benchmark_perplexity.pdf
@@ -28,57 +28,7 @@ from kv_state import (
 )
 from attention import tkv_compressed_attention, sinked_attention
 from oja_kv import init_oja_kv, append_token_oja, reconstruct_kv_oja
-from model_hooks import load_gpt2
-
-
-def extract_real_kv(max_seq_len: int = 512, layer_idx: int = 6, head_idx: int = 0):
-    """
-    Capture real K/V activations from GPT-2 small on a WikiText-2 passage.
-
-    Runs a single forward pass with a lightweight capture hook registered in
-    ALL_ATTENTION_FUNCTIONS. The hook saves key/value for `layer_idx` and
-    passes through exact SDPA attention for every layer so downstream activations
-    are correct.
-
-    Returns (K, V) as JAX arrays of shape (max_seq_len, head_dim=64).
-    """
-    import torch
-    import torch.nn.functional as F
-    from transformers.models.gpt2.modeling_gpt2 import ALL_ATTENTION_FUNCTIONS
-    from datasets import load_dataset
-
-    model, tok = load_gpt2()
-
-    ds = load_dataset("Salesforce/wikitext", "wikitext-2-raw-v1", split="test")
-    text = " ".join(t for t in ds["text"] if t.strip())
-    ids = tok.encode(text, return_tensors="pt")[:, :max_seq_len]
-
-    captured = {}
-    call_count = [0]
-
-    def _capture_fn(module, query, key, value, attention_mask=None, scaling=None, dropout=0.0, **kwargs):
-        layer = call_count[0]
-        call_count[0] += 1
-        if layer == layer_idx:
-            captured["k"] = key[0, head_idx].detach().float().cpu()
-            captured["v"] = value[0, head_idx].detach().float().cpu()
-        scale = scaling if scaling is not None else query.shape[-1] ** -0.5
-        out = F.scaled_dot_product_attention(query, key, value, scale=scale, is_causal=True)
-        return out.transpose(1, 2), None  # (batch, seq_len, heads, head_dim)
-
-    IMPL_KEY = "_tkv_capture"
-    ALL_ATTENTION_FUNCTIONS.register(IMPL_KEY, _capture_fn)
-    orig_impl = model.config._attn_implementation
-    model.config._attn_implementation = IMPL_KEY
-
-    with torch.no_grad():
-        model(ids, use_cache=False)
-
-    model.config._attn_implementation = orig_impl
-
-    K = jnp.array(captured["k"].numpy())  # (max_seq_len, head_dim)
-    V = jnp.array(captured["v"].numpy())
-    return K, V
+from model_hooks import load_gpt2, extract_real_kv_generic
 
 
 # ---------------------------------------------------------------------------
@@ -86,19 +36,27 @@ def extract_real_kv(max_seq_len: int = 512, layer_idx: int = 6, head_idx: int = 
 # ---------------------------------------------------------------------------
 
 def benchmark_reconstruction(
+    model, tokenizer,
     seq_lens=(32, 64, 128, 256, 512),
     ranks=(2, 4, 8, 16, 32),
-    d=64,
+    d=128,
     T_max=1024,
+    layer_idx=16,
+    kv_head_idx=0,
+    device="cpu",
 ):
     """
     For each (seq_len, rank): build compressed state by appending tokens one-by-one
     (Brand update), then measure ||K - K_r||_F / ||K||_F.
 
-    Uses real K/V activations from GPT-2 small (layer 6, head 0) on WikiText-2.
+    Uses real K/V activations from the given model (default: Mistral-7B,
+    layer 16, KV head 0) on WikiText-2.
     """
-    print("Extracting real K/V from GPT-2...")
-    K_real, V_real = extract_real_kv(max_seq_len=max(seq_lens))
+    print("Extracting real K/V from model...")
+    K_real, V_real = extract_real_kv_generic(
+        model, tokenizer, max_seq_len=max(seq_lens),
+        layer_idx=layer_idx, kv_head_idx=kv_head_idx, device=device,
+    )
     results = {}  # (seq_len, rank) -> rel_error
 
     for seq_len in seq_lens:
@@ -205,7 +163,7 @@ def plot_memory(table, seq_lens, ranks, path="benchmark_memory.pdf"):
 
 
 # ---------------------------------------------------------------------------
-# Metric 3: Perplexity on GPT-2
+# Metric 3: Halko cold-start perplexity ablation (no streaming)
 # ---------------------------------------------------------------------------
 
 SAMPLE_TEXTS = [
@@ -217,20 +175,22 @@ SAMPLE_TEXTS = [
 ]
 
 
-def benchmark_perplexity(
-    ranks=(4, 8, 16, 32, 48),
+def benchmark_halko_cold_start_perplexity(
+    model, tokenizer,
+    ranks=(8, 16, 32, 48, 64),
     max_length=128,
     T_max=512,
-    head_dim=64,
+    head_dim=128,
     device="cpu",
 ):
-    from model_hooks import (
-        load_gpt2, make_phi_for_gpt2, compute_perplexity,
-        patch_gpt2_for_compression, unpatch_gpt2,
-    )
-
-    print("Loading GPT-2...")
-    model, tokenizer = load_gpt2(device)
+    """
+    Perplexity under a single Halko cold-start SVD per forward call (no
+    Brand streaming, no freeze) at a uniform rank applied to every layer.
+    Isolates the cold-start mechanism's lossiness in isolation, since
+    streaming Brand correctness is already validated on real activations
+    by Metrics 1/4/4b.
+    """
+    from model_hooks import make_phi, compute_perplexity, patch_model_halko_cold_start, unpatch_model
 
     ppl_exact = compute_perplexity(
         model, tokenizer, SAMPLE_TEXTS, max_length=max_length, device=device
@@ -239,12 +199,12 @@ def benchmark_perplexity(
 
     results = {"exact": ppl_exact}
     for rank in ranks:
-        phi = make_phi_for_gpt2(rank, head_dim)
-        orig = patch_gpt2_for_compression(model, phi, rank, T_max)
+        phi = make_phi(rank, head_dim)
+        orig = patch_model_halko_cold_start(model, phi, rank, T_max)
         ppl = compute_perplexity(
             model, tokenizer, SAMPLE_TEXTS, max_length=max_length, device=device
         )
-        unpatch_gpt2(model, orig)
+        unpatch_model(model, orig)
         results[rank] = ppl
         print(f"  rank={rank:3d}: perplexity={ppl:.2f}  ratio={ppl/ppl_exact:.4f}")
 
@@ -343,19 +303,27 @@ def benchmark_wikitext_perplexity(
 # ---------------------------------------------------------------------------
 
 def benchmark_brand_vs_oja(
+    model, tokenizer,
     seq_lens=(32, 64, 128, 256, 512),
     ranks=(2, 4, 8, 16, 32),
-    d=64,
+    d=128,
     T_max=1024,
+    layer_idx=16,
+    kv_head_idx=0,
+    device="cpu",
 ):
     """
     Same K matrix, same rank budget, same sequence lengths.
     Returns dicts keyed by (seq_len, rank) for each method.
 
-    Uses real K/V activations from GPT-2 small (layer 6, head 0) on WikiText-2.
+    Uses real K/V activations from the given model (default: Mistral-7B,
+    layer 16, KV head 0) on WikiText-2.
     """
-    print("Extracting real K/V from GPT-2...")
-    K_real, V_real = extract_real_kv(max_seq_len=max(seq_lens))
+    print("Extracting real K/V from model...")
+    K_real, V_real = extract_real_kv_generic(
+        model, tokenizer, max_seq_len=max(seq_lens),
+        layer_idx=layer_idx, kv_head_idx=kv_head_idx, device=device,
+    )
     brand_err, oja_err = {}, {}
     brand_time, oja_time = {}, {}
 
@@ -395,7 +363,7 @@ def benchmark_brand_vs_oja(
     return brand_err, oja_err, brand_time, oja_time
 
 
-def _run_one_head_comparison(K_head, V_head, seq_len, rank, T_max=1024, d=64):
+def _run_one_head_comparison(K_head, V_head, seq_len, rank, T_max=1024, d=128):
     """Run BrandOnly vs OjaKV on one (K, V) pair; return (brand_rel_err, oja_rel_err)."""
     K_true = K_head[:seq_len]
     V_true = V_head[:seq_len]
@@ -416,29 +384,36 @@ def _run_one_head_comparison(K_head, V_head, seq_len, rank, T_max=1024, d=64):
 
 
 def benchmark_multi_head_comparison(
-    layers=(0, 3, 6, 9, 11),
-    heads=(0, 4, 8),
+    model, tokenizer,
+    layers=(0, 8, 16, 24),
+    kv_heads=(0, 3, 6),
     seq_lens=(64, 128, 256, 512),
     ranks=(8, 16, 32),
-    d=64,
+    d=128,
     T_max=1024,
+    device="cpu",
 ):
     """
-    Sweep BrandOnly vs OjaKV over multiple GPT-2 small layers and heads.
+    Sweep BrandOnly vs OjaKV over multiple model layers and KV heads.
     Reports mean ± std of reconstruction error and advantage across all configs.
-    15 configurations = 5 layers × 3 heads.
+    12 configurations = 4 layers × 3 KV heads (reduced from 15 for CPU runtime
+    on a 32-layer/8-KV-head model; layers span early/early-mid/mid/late, KV
+    heads span low/mid/high of the 8 available).
     """
     import numpy as np
 
-    configs = [(l, h) for l in layers for h in heads]
+    configs = [(l, h) for l in layers for h in kv_heads]
     max_len = max(seq_lens)
 
     all_brand = {(t, r): [] for t in seq_lens for r in ranks}
     all_oja = {(t, r): [] for t in seq_lens for r in ranks}
 
-    for layer_idx, head_idx in configs:
-        print(f"  Extracting layer={layer_idx}, head={head_idx} ...", flush=True)
-        K, V = extract_real_kv(max_seq_len=max_len, layer_idx=layer_idx, head_idx=head_idx)
+    for layer_idx, kv_head_idx in configs:
+        print(f"  Extracting layer={layer_idx}, kv_head={kv_head_idx} ...", flush=True)
+        K, V = extract_real_kv_generic(
+            model, tokenizer, max_seq_len=max_len,
+            layer_idx=layer_idx, kv_head_idx=kv_head_idx, device=device,
+        )
         for seq_len in seq_lens:
             for rank in ranks:
                 be, oe = _run_one_head_comparison(K, V, seq_len, rank, T_max, d)
@@ -464,14 +439,21 @@ def benchmark_multi_head_comparison(
     return all_brand, all_oja
 
 
-def benchmark_streaming_error(rank=16, seq_len=512, d=64, T_max=1024):
+def benchmark_streaming_error(
+    model, tokenizer, rank=16, seq_len=512, d=128, T_max=1024,
+    layer_idx=16, kv_head_idx=0, device="cpu",
+):
     """
     Records reconstruction error after every token for both methods.
     Shows how error accumulates as the sequence grows.
 
-    Uses real K/V activations from GPT-2 small (layer 6, head 0) on WikiText-2.
+    Uses real K/V activations from the given model (default: Mistral-7B,
+    layer 16, KV head 0) on WikiText-2.
     """
-    K_true, V_true = extract_real_kv(max_seq_len=seq_len)
+    K_true, V_true = extract_real_kv_generic(
+        model, tokenizer, max_seq_len=seq_len,
+        layer_idx=layer_idx, kv_head_idx=kv_head_idx, device=device,
+    )
 
     state_brand = init_compressed_kv(T_max, rank, d)
     state_o = init_oja_kv(T_max, rank, d)
@@ -908,26 +890,31 @@ def benchmark_tkv_vs_oja_memory(
     pyramid_ranks=None,
     uniform_rank=8,
     d=64,
+    n_layers=_GPT2_LAYERS,
+    n_heads=_GPT2_HEADS,
 ):
     """
     Theoretical memory comparison across methods at long context lengths.
     Reports GB for full KV, uniform-rank OjaKV-style, and TKV pyramid.
+
+    n_heads must be the number of KV heads (not query heads) for GQA models
+    — only KV heads are actually cached.
     """
     if pyramid_ranks is None:
         pyramid_ranks = PYRAMID_RANKS_GPT2
 
     results = {}
     for seq_len in seq_lens:
-        full_bytes = 4 * 2 * seq_len * d * _GPT2_LAYERS * _GPT2_HEADS  # float32
+        full_bytes = 4 * 2 * seq_len * d * n_layers * n_heads  # float32
 
         oja_bytes = sum(
-            _tkv_bytes(seq_len, uniform_rank, d) * _GPT2_HEADS
-            for _ in range(_GPT2_LAYERS)
+            _tkv_bytes(seq_len, uniform_rank, d) * n_heads
+            for _ in range(n_layers)
         )
 
         pyramid_bytes = sum(
-            _tkv_bytes(seq_len, pyramid_ranks[l], d) * _GPT2_HEADS
-            for l in range(_GPT2_LAYERS)
+            _tkv_bytes(seq_len, pyramid_ranks[l], d) * n_heads
+            for l in range(n_layers)
         )
 
         results[seq_len] = {
@@ -1033,46 +1020,48 @@ def plot_tkv_reconstruction(tkv_err, oja_err, seq_lens, ranks, path="benchmark_t
 
 
 def benchmark_tkv_perplexity(
+    model, tokenizer,
     pyramid_ranks=None,
+    halko_rank=32,
     max_length=128,
+    head_dim=128,
+    T_max=512,
     device="cpu",
 ):
     """
-    Perplexity comparison: exact GPT-2 vs BrandOnly (rank=16) vs TKV pyramid.
+    Perplexity comparison: exact vs TKV pyramid vs Halko cold-start (uniform
+    rank, no streaming) vs OjaKV pyramid.
     """
     from model_hooks import (
-        load_gpt2, compute_perplexity,
-        patch_gpt2_for_compression, unpatch_gpt2,
-        patch_gpt2_tkv, make_phi_for_gpt2, PYRAMID_RANKS,
+        compute_perplexity,
+        patch_model_halko_cold_start,
+        patch_model_tkv_pyramid, make_phi, _default_pyramid,
         patch_model_oja, unpatch_model,
     )
     if pyramid_ranks is None:
-        pyramid_ranks = PYRAMID_RANKS
-
-    print("Loading GPT-2...")
-    model, tokenizer = load_gpt2(device)
+        pyramid_ranks = _default_pyramid(model.config.num_hidden_layers)
 
     ppl_exact = compute_perplexity(model, tokenizer, SAMPLE_TEXTS, max_length=max_length, device=device)
     print(f"  Exact perplexity:                      {ppl_exact:.2f}")
 
-    orig = patch_gpt2_tkv(model, pyramid_ranks)
+    orig = patch_model_tkv_pyramid(model, pyramid_ranks)
     ppl_tkv = compute_perplexity(model, tokenizer, SAMPLE_TEXTS, max_length=max_length, device=device)
-    unpatch_gpt2(model, orig)
+    unpatch_model(model, orig)
     avg_rank = sum(pyramid_ranks) // len(pyramid_ranks)
     print(f"  TKV pyramid (avg_rank={avg_rank}):           {ppl_tkv:.2f}  ratio={ppl_tkv/ppl_exact:.4f}")
 
-    phi = make_phi_for_gpt2(16, 64)
-    orig = patch_gpt2_for_compression(model, phi, 16, 512)
-    ppl_brand = compute_perplexity(model, tokenizer, SAMPLE_TEXTS, max_length=max_length, device=device)
-    unpatch_gpt2(model, orig)
-    print(f"  BrandOnly (uniform rank=16):           {ppl_brand:.2f}  ratio={ppl_brand/ppl_exact:.4f}")
+    phi = make_phi(halko_rank, head_dim)
+    orig = patch_model_halko_cold_start(model, phi, halko_rank, T_max)
+    ppl_halko = compute_perplexity(model, tokenizer, SAMPLE_TEXTS, max_length=max_length, device=device)
+    unpatch_model(model, orig)
+    print(f"  Halko cold-start (uniform rank={halko_rank}):    {ppl_halko:.2f}  ratio={ppl_halko/ppl_exact:.4f}")
 
     orig = patch_model_oja(model, pyramid_ranks)
     ppl_oja = compute_perplexity(model, tokenizer, SAMPLE_TEXTS, max_length=max_length, device=device)
     unpatch_model(model, orig)
     print(f"  OjaKV (pyramid):                       {ppl_oja:.2f}  ratio={ppl_oja/ppl_exact:.4f}")
 
-    return {"exact": ppl_exact, "tkv_pyramid": ppl_tkv, "brand_r16": ppl_brand, "oja": ppl_oja}
+    return {"exact": ppl_exact, "tkv_pyramid": ppl_tkv, "halko_uniform": ppl_halko, "oja": ppl_oja}
 
 
 # ---------------------------------------------------------------------------
@@ -1204,11 +1193,15 @@ def plot_sinked(results, seq_lens, path="benchmark_sinked.pdf"):
 # ---------------------------------------------------------------------------
 
 def benchmark_tkv_streaming_vs_oja(
+    model, tokenizer,
     warmup_len: int = 256,
     decode_len: int = 256,
-    ranks=(8, 16, 32),
-    d: int = 64,
+    ranks=(8, 16, 32, 64),
+    d: int = 128,
     T_max: int = 2048,
+    layer_idx=16,
+    kv_head_idx=0,
+    device="cpu",
 ):
     """
     Measures decode-phase per-token update time after a shared warmup.
@@ -1220,10 +1213,14 @@ def benchmark_tkv_streaming_vs_oja(
     then tkv_add_token writes in-place (O(R·d), no copy).  OjaKV still
     runs QR on every decode token (O(R²·d)).
 
-    Uses real K/V from GPT-2 small (layer 6, head 0) on WikiText-2.
+    Uses real K/V from the given model (default: Mistral-7B, layer 16, KV
+    head 0) on WikiText-2.
     """
-    print("Extracting real K/V from GPT-2...")
-    K_real, V_real = extract_real_kv(max_seq_len=warmup_len + decode_len)
+    print("Extracting real K/V from model...")
+    K_real, V_real = extract_real_kv_generic(
+        model, tokenizer, max_seq_len=warmup_len + decode_len,
+        layer_idx=layer_idx, kv_head_idx=kv_head_idx, device=device,
+    )
     K_warm, V_warm   = K_real[:warmup_len],   V_real[:warmup_len]
     K_decode, V_decode = K_real[warmup_len:], V_real[warmup_len:]
     K_all = jnp.concatenate([K_warm, K_decode], axis=0)
@@ -1375,15 +1372,29 @@ def plot_head_to_head(ppl_results, streaming_results, tkv_err, oja_err,
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
+    from model_hooks import load_model, PYRAMID_RANKS_32L
+
     SEQ_LENS = (32, 64, 128, 256, 512)
     RANKS = (2, 4, 8, 16, 32)
-    D = 64
+    D = 64          # used only by the synthetic-data metrics below (2, 5, 6, 7, 8 GPT-2 row, 8b, 10)
     T_MAX = 1024
+
+    D_REAL = 128    # Mistral-7B head_dim, used by every real-model metric
+    LAYER_IDX = 16  # middle of Mistral's 32 layers
+    KV_HEAD_IDX = 0
+    DEVICE = "cpu"
+
+    print("Loading Mistral-7B-v0.1 (CPU, this will take a while)...")
+    model, tokenizer = load_model("mistralai/Mistral-7B-v0.1", device=DEVICE)
+    print("Model loaded.")
 
     print("=" * 50)
     print("Metric 1: Reconstruction Error")
     print("=" * 50)
-    recon = benchmark_reconstruction(SEQ_LENS, RANKS, D, T_MAX)
+    recon = benchmark_reconstruction(
+        model, tokenizer, SEQ_LENS, RANKS, D_REAL, T_MAX,
+        layer_idx=LAYER_IDX, kv_head_idx=KV_HEAD_IDX, device=DEVICE,
+    )
     plot_reconstruction(recon, SEQ_LENS, RANKS)
     for rank in RANKS:
         err = recon[(512, rank)]
@@ -1398,13 +1409,15 @@ if __name__ == "__main__":
 
     print()
     print("=" * 50)
-    print("Metric 3: Perplexity on GPT-2")
+    print("Metric 3: Halko Cold-Start Perplexity Ablation (no streaming)")
     print("=" * 50)
-    ppl_results = benchmark_perplexity(
-        ranks=(4, 8, 16, 32, 48),
+    ppl_results = benchmark_halko_cold_start_perplexity(
+        model, tokenizer,
+        ranks=(8, 16, 32, 48, 64),
         max_length=128,
         T_max=T_MAX,
-        head_dim=D,
+        head_dim=D_REAL,
+        device=DEVICE,
     )
     plot_perplexity(ppl_results)
 
@@ -1412,22 +1425,30 @@ if __name__ == "__main__":
     print("=" * 50)
     print("Metric 4: BrandOnly vs OjaKV Head-to-Head")
     print("=" * 50)
-    brand_err, oja_err, brand_time, oja_time = benchmark_brand_vs_oja(SEQ_LENS, RANKS, D, T_MAX)
-    brand_curve, oja_curve = benchmark_streaming_error(rank=16, seq_len=512, d=D, T_max=T_MAX)
+    brand_err, oja_err, brand_time, oja_time = benchmark_brand_vs_oja(
+        model, tokenizer, SEQ_LENS, RANKS, D_REAL, T_MAX,
+        layer_idx=LAYER_IDX, kv_head_idx=KV_HEAD_IDX, device=DEVICE,
+    )
+    brand_curve, oja_curve = benchmark_streaming_error(
+        model, tokenizer, rank=16, seq_len=512, d=D_REAL, T_max=T_MAX,
+        layer_idx=LAYER_IDX, kv_head_idx=KV_HEAD_IDX, device=DEVICE,
+    )
     plot_comparison(brand_err, oja_err, brand_time, oja_time, brand_curve, oja_curve, SEQ_LENS, RANKS)
     print_comparison_table(brand_err, oja_err, brand_time, oja_time, SEQ_LENS, RANKS)
 
     print()
     print("=" * 50)
-    print("Metric 4b: Multi-Layer/Head Comparison (BrandOnly vs OjaKV)")
+    print("Metric 4b: Multi-Layer/KV-Head Comparison (BrandOnly vs OjaKV)")
     print("=" * 50)
     benchmark_multi_head_comparison(
-        layers=(0, 3, 6, 9, 11),
-        heads=(0, 4, 8),
+        model, tokenizer,
+        layers=(0, 8, 16, 24),
+        kv_heads=(0, 3, 6),
         seq_lens=(64, 128, 256, 512),
         ranks=(8, 16, 32),
-        d=D,
+        d=D_REAL,
         T_max=T_MAX,
+        device=DEVICE,
     )
 
     print()
@@ -1470,11 +1491,21 @@ if __name__ == "__main__":
 
     print()
     print("=" * 50)
-    print("Metric 8: TKV Memory vs OjaKV at 128K+")
+    print("Metric 8: TKV Memory vs OjaKV at 128K+ (GPT-2 geometry)")
     print("=" * 50)
     LONG_SEQ_LENS = (1_000, 8_000, 32_000, 128_000)
     mem_tkv = benchmark_tkv_vs_oja_memory(LONG_SEQ_LENS, PYRAMID_RANKS_GPT2, uniform_rank=8, d=D)
     print_tkv_memory_table(mem_tkv, LONG_SEQ_LENS)
+
+    print()
+    print("=" * 50)
+    print("Metric 8 (Mistral-7B): TKV Memory vs OjaKV at 128K+ (32L, 8 KV heads)")
+    print("=" * 50)
+    mem_tkv_mistral = benchmark_tkv_vs_oja_memory(
+        LONG_SEQ_LENS, PYRAMID_RANKS_32L, uniform_rank=8, d=D_REAL,
+        n_layers=32, n_heads=8,
+    )
+    print_tkv_memory_table(mem_tkv_mistral, LONG_SEQ_LENS)
 
     print()
     print("=" * 50)
@@ -1489,9 +1520,12 @@ if __name__ == "__main__":
 
     print()
     print("=" * 50)
-    print("Metric 9: TKV Perplexity on GPT-2")
+    print("Metric 9: TKV Perplexity (Mistral-7B)")
     print("=" * 50)
-    ppl_tkv_results = benchmark_tkv_perplexity(pyramid_ranks=PYRAMID_RANKS_GPT2, max_length=128)
+    ppl_tkv_results = benchmark_tkv_perplexity(
+        model, tokenizer, pyramid_ranks=PYRAMID_RANKS_32L, halko_rank=32,
+        max_length=128, head_dim=D_REAL, T_max=T_MAX, device=DEVICE,
+    )
 
     print()
     print("=" * 50)
@@ -1508,10 +1542,13 @@ if __name__ == "__main__":
     print("=" * 50)
     print("Metric 11: TKV Streaming vs OjaKV (Decode Phase)")
     print("=" * 50)
+    STREAMING_RANKS = (8, 16, 32, 64)
     streaming_results = benchmark_tkv_streaming_vs_oja(
-        warmup_len=256, decode_len=256, ranks=(8, 16, 32), d=D, T_max=T_MAX,
+        model, tokenizer,
+        warmup_len=256, decode_len=256, ranks=STREAMING_RANKS, d=D_REAL, T_max=T_MAX,
+        layer_idx=LAYER_IDX, kv_head_idx=KV_HEAD_IDX, device=DEVICE,
     )
-    plot_tkv_streaming_vs_oja(streaming_results, ranks=(8, 16, 32))
+    plot_tkv_streaming_vs_oja(streaming_results, ranks=STREAMING_RANKS)
 
     print()
     print("=" * 50)

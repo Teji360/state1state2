@@ -1,10 +1,10 @@
+Warning: You are sending unauthenticated requests to the HF Hub. Please set a HF_TOKEN to enable higher rate limits and faster downloads.
 ==================================================
 Metric 1: Reconstruction Error
 ==================================================
 Extracting real K/V from GPT-2...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 7105.17it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
 Saved benchmark_reconstruction.pdf
   t=512, r=2: rel_err=0.6663
   t=512, r=4: rel_err=0.3732
@@ -28,121 +28,105 @@ seq_len |  r= 2  r= 4  r= 8  r=16  r=32
 Metric 3: Perplexity on GPT-2
 ==================================================
 Loading GPT-2...
-`loss_type=None` was set in the config but it is unrecognised.Using the default loss: `ForCausalLMLoss`.
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 9638.49it/s]
+[transformers] `loss_type=None` was set in the config but it is unrecognized. Using the default loss: `ForCausalLMLoss`.
   Exact perplexity: 129.62
   rank=  4: perplexity=443.35  ratio=3.4204
-  rank=  8: perplexity=445.69  ratio=3.4384
+  rank=  8: perplexity=445.68  ratio=3.4383
   rank= 16: perplexity=155.44  ratio=1.1992
   rank= 32: perplexity=129.62  ratio=1.0000
   rank= 48: perplexity=129.62  ratio=1.0000
 Saved benchmark_perplexity.pdf
 
 ==================================================
-Metric 4: TKV vs OjaKV Head-to-Head
+Metric 4: BrandOnly vs OjaKV Head-to-Head
 ==================================================
 Extracting real K/V from GPT-2...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
-Saved benchmark_comparison.pdf
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 23986.90it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 18691.31it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Saved benchmark_brand_vs_oja.pdf
 
-  seq rank    TKV err    Oja err  TKV ms/tok  Oja ms/tok  err ratio
+  seq rank  Brand err    Oja err  Brand ms/tok  Oja ms/tok  err ratio
 ----------------------------------------------------------------------
-   32    2     0.3153     0.5147       5.667       6.123       1.63x
-   32    4     0.2816     0.5149       5.366       6.517       1.83x
-   32    8     0.2026     0.5152       4.780       7.737       2.54x
-   32   16     0.1151     0.5248       5.183       7.116       4.56x
-   32   32     0.0000     0.5212       4.756       6.484  132517.28x
-   64    2     0.3217     0.5730       5.182       0.967       1.78x
-   64    4     0.2920     0.5732       5.379       1.251       1.96x
-   64    8     0.2367     0.5726       6.040       1.315       2.42x
-   64   16     0.1653     0.5760       5.338       1.077       3.49x
-   64   32     0.0743     0.5754       4.988       1.239       7.75x
-  128    2     0.3572     0.7255       5.727       1.551       2.03x
-  128    4     0.3080     0.7263       5.887       1.355       2.36x
-  128    8     0.2475     0.7253       6.306       1.283       2.93x
-  128   16     0.1839     0.7256       7.001       1.116       3.95x
-  128   32     0.1029     0.7265       5.202       1.230       7.06x
-  256    2     0.4513     0.9502       5.949       1.085       2.11x
-  256    4     0.3204     0.9507       5.127       1.127       2.97x
-  256    8     0.2569     0.9507       5.415       1.085       3.70x
-  256   16     0.1990     0.9495       5.333       1.179       4.77x
-  256   32     0.1228     0.9521       5.447       1.038       7.76x
-  512    2     0.6663     1.2000       5.129       0.988       1.80x
-  512    4     0.3732     1.2002       4.912       1.043       3.22x
-  512    8     0.2825     1.2017       5.352       1.163       4.25x
-  512   16     0.2140     1.1993       5.290       1.412       5.60x
-  512   32     0.1386     1.2025       5.430       1.156       8.68x
+   32    2     0.3153     0.5147       1.952       3.268       1.63x
+   32    4     0.2816     0.5149       2.127       3.439       1.83x
+   32    8     0.2026     0.5152       2.040       3.666       2.54x
+   32   16     0.1151     0.5248       2.144       3.700       4.56x
+   32   32     0.0000     0.5212       2.189       3.934  133279.91x
+   64    2     0.3217     0.5730       1.952       0.443       1.78x
+   64    4     0.2920     0.5732       1.953       0.434       1.96x
+   64    8     0.2367     0.5726       1.999       0.423       2.42x
+   64   16     0.1653     0.5760       2.083       0.500       3.49x
+   64   32     0.0743     0.5754       2.029       0.547       7.75x
+  128    2     0.3572     0.7255       1.935       0.418       2.03x
+  128    4     0.3080     0.7263       1.840       0.426       2.36x
+  128    8     0.2475     0.7253       1.985       0.450       2.93x
+  128   16     0.1839     0.7256       2.071       0.477       3.95x
+  128   32     0.1029     0.7265       2.160       0.620       7.06x
+  256    2     0.4513     0.9502       1.975       0.433       2.11x
+  256    4     0.3204     0.9507       2.077       0.445       2.97x
+  256    8     0.2569     0.9507       2.341       0.459       3.70x
+  256   16     0.1990     0.9495       2.404       0.544       4.77x
+  256   32     0.1228     0.9521       2.074       0.712       7.76x
+  512    2     0.6663     1.2000       1.877       0.432       1.80x
+  512    4     0.3732     1.2002       2.043       0.434       3.22x
+  512    8     0.2825     1.2017       2.058       0.436       4.25x
+  512   16     0.2140     1.1993       1.975       0.488       5.60x
+  512   32     0.1386     1.2025       2.205       0.573       8.68x
 
 ==================================================
-Metric 4b: Multi-Layer/Head Comparison (TKV vs OjaKV)
+Metric 4b: Multi-Layer/Head Comparison (BrandOnly vs OjaKV)
 ==================================================
   Extracting layer=0, head=0 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 16795.37it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
   Extracting layer=0, head=4 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 20240.54it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
   Extracting layer=0, head=8 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 21810.03it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
   Extracting layer=3, head=0 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 23230.18it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
   Extracting layer=3, head=4 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 21173.24it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
   Extracting layer=3, head=8 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 19450.32it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
   Extracting layer=6, head=0 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 16608.88it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
   Extracting layer=6, head=4 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 20580.76it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
   Extracting layer=6, head=8 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 18240.39it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
   Extracting layer=9, head=0 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 19223.24it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
   Extracting layer=9, head=4 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 15910.32it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
   Extracting layer=9, head=8 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 19158.58it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
   Extracting layer=11, head=0 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 19079.67it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
   Extracting layer=11, head=4 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 19938.23it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
   Extracting layer=11, head=8 ...
-Using the latest cached version of the dataset since Salesforce/wikitext couldn't be found on the Hugging Face Hub (offline mode is enabled).
-Found the latest cached dataset configuration 'wikitext-2-raw-v1' at C:\Users\Chris\.cache\huggingface\datasets\Salesforce___wikitext\wikitext-2-raw-v1\0.0.0\b08601e04326c79dfdd32d625aee71d232d685c3 (last modified on Tue Jun  9 22:22:49 2026).
-Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 20238.56it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
 
-Multi-head TKV vs OjaKV (mean ± std over 15 configs)
-   T   R        TKV              OjaKV          Advantage   
+Multi-head BrandOnly vs OjaKV (mean ± std over 15 configs)
+   T   R     BrandOnly           OjaKV          Advantage   
 ------------------------------------------------------------
   64   8  0.372±0.101  0.681±0.084  1.98×±0.63×
   64  16  0.256±0.069  0.677±0.084  2.87×±0.93×
@@ -158,16 +142,16 @@ Multi-head TKV vs OjaKV (mean ± std over 15 configs)
  512  32  0.226±0.065  0.971±0.218  5.37×±4.15×
 
 ==================================================
-Metric 5: Lazy Flush Sweep (TKV vs OjaKV)
+Metric 5: Lazy Flush Sweep (BrandOnly vs OjaKV)
 ==================================================
 Saved benchmark_flush_sweep.pdf
 
 t=512 — error / ms_tok
- rank       TKV-exact      TKV-flush2      TKV-flush4      TKV-flush8           OjaKV
--------------------------------------------------------------------------------------
-    8  0.659/ 5.37ms  1.260/ 5.58ms  1.246/ 6.08ms  1.245/ 5.41ms  0.750/ 1.33ms
-   16  0.541/ 5.39ms  1.283/ 6.02ms  1.292/ 5.63ms  1.288/ 5.57ms  0.679/ 1.42ms
-   32  0.379/ 5.73ms  1.326/ 5.51ms  1.321/ 5.61ms  1.321/ 5.94ms  0.546/ 1.40ms
+ rank  BrandOnly-exact  BrandOnly-flush2  BrandOnly-flush4  BrandOnly-flush8           OjaKV
+--------------------------------------------------------------------------------------------
+    8  0.659/ 2.21ms  1.258/ 2.05ms  1.245/ 1.97ms  1.244/ 2.06ms  0.750/ 0.47ms
+   16  0.541/ 2.22ms  1.282/ 2.27ms  1.293/ 2.18ms  1.290/ 2.14ms  0.679/ 0.52ms
+   32  0.379/ 2.14ms  1.327/ 2.18ms  1.322/ 2.39ms  1.317/ 2.25ms  0.546/ 0.63ms
 
 ==================================================
 Metric 6: Importance-Weighted Cold Start
@@ -180,23 +164,23 @@ Saved benchmark_importance.pdf
     32    0.0451    0.0043   90.5%
 
 ==================================================
-Metric 7: Hybrid Streaming (Brand warmup → Frozen long-context)
+Metric 7: Hybrid Streaming (Brand warmup → TKV long-context)
 ==================================================
 
-       T   brand err   frozen err   hybrid err   brand ms   frozen ms   hybrid ms
+       T   brand err      tkv err   hybrid err   brand ms      tkv ms   hybrid ms
 --------------------------------------------------------------------------------
-     128      0.4903       0.4728       0.4903      782.8       112.1       692.8
-     512      0.5413       0.5239       0.5413     2863.0        90.2      2763.5
-   1,000      0.5440       0.5367       0.5487     5316.4       228.2      2603.9
-   4,000      0.5418       0.5456       0.5531    23741.6      1148.0      4060.1
-  16,000      0.5411       0.5488       0.5557   100654.6      6303.7      9396.2
+     128      0.4903       0.4728       0.4903      333.2        97.5       516.4
+     512      0.5413       0.5239       0.5413     1232.5        61.6      1346.7
+   1,000      0.5440       0.5367       0.5487     2323.6       537.0      1193.6
+   4,000      0.5418       0.5456       0.5531     8929.5       659.3      1621.5
+  16,000      0.5411       0.5488       0.5557    38187.2      2614.6      3616.9
 Saved benchmark_hybrid.pdf
 
 ==================================================
-Metric 8: Frozen-Basis Memory vs OjaKV at 128K+
+Metric 8: TKV Memory vs OjaKV at 128K+
 ==================================================
 
-   seq_len    full KV   OjaKV r=8   Frozen pyramid   compression
+   seq_len    full KV   OjaKV r=8      TKV pyramid   compression
 -----------------------------------------------------------------
      1,000     0.074GB      0.010GB           0.018GB         4.0x
      8,000     0.590GB      0.074GB           0.139GB         4.2x
@@ -204,10 +188,10 @@ Metric 8: Frozen-Basis Memory vs OjaKV at 128K+
    128,000     9.437GB      1.180GB           2.213GB         4.3x
 
 ==================================================
-Metric 8: Frozen-Basis Reconstruction Error at Long Context
+Metric 8b: TKV Reconstruction Error at Long Context
 ==================================================
 
-   seq_len   rank   frozen err     oja err   frozen wins
+   seq_len   rank      tkv err     oja err      tkv wins
 ------------------------------------------------------------
      1,000      4       0.7503      0.7913           yes
      1,000      8       0.6549      0.7411           yes
@@ -218,25 +202,47 @@ Metric 8: Frozen-Basis Reconstruction Error at Long Context
     32,000      4       0.7541      0.7636           yes
     32,000      8       0.6619      0.7154           yes
     32,000     16       0.5492      0.6319           yes
-Saved benchmark_frozen_reconstruction.pdf
+Saved benchmark_tkv_reconstruction.pdf
 
 ==================================================
-Metric 9: Frozen-Basis Perplexity on GPT-2
+Metric 9: TKV Perplexity on GPT-2
 ==================================================
 Loading GPT-2...
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 9868.64it/s]
   Exact perplexity:                      129.62
-  Frozen pyramid (avg_rank=15):        89.59  ratio=0.6911
-  Brand TKV (uniform rank=16):           155.44  ratio=1.1992
+  TKV pyramid (avg_rank=15):           89.59  ratio=0.6911
+  BrandOnly (uniform rank=16):           155.44  ratio=1.1992
+  OjaKV (pyramid):                       756.18  ratio=5.8338
 
 ==================================================
-Metric 10: Sinked (full-precision sink+recent) vs Frozen
+Metric 10: Sinked (full-precision sink+recent) vs TKV
 ==================================================
 
-       T   frozen sink err   sinked sink err   frozen total   sinked total   attn diff   extra MB
+       T      tkv sink err   sinked sink err      tkv total   sinked total   attn diff   extra MB
 -----------------------------------------------------------------------------------------------
      256            0.3127            0.0000         0.6336         0.4381      1.9324     0.066MB
    1,000            0.1636            0.0000         0.6549         0.6104      1.6849     0.066MB
    4,000            0.0815            0.0000         0.6592         0.6494      1.5992     0.066MB
 Saved benchmark_sinked.pdf
+
+==================================================
+Metric 11: TKV Streaming vs OjaKV (Decode Phase)
+==================================================
+Extracting real K/V from GPT-2...
+Loading weights:   0%|          | 0/148 [00:00<?, ?it/s]Loading weights: 100%|██████████| 148/148 [00:00<00:00, 18601.69it/s]
+[transformers] Token indices sequence length is longer than the specified maximum sequence length for this model (286177 > 1024). Running this sequence through the model will result in indexing errors
+
+TKV Streaming vs OjaKV — warmup=256, decode=256 tokens
+rank     BrandOnly           TKV         OjaKV  tkv_err  oja_err
+----------------------------------------------------------------
+   8       2.159ms       0.168ms       0.466ms  0.4437      1.2017
+  16       2.128ms       0.143ms       0.543ms  0.3714      1.1993
+  32       2.192ms       0.181ms       0.612ms  0.2709      1.2025
+Saved benchmark_tkv_streaming.pdf
+
+==================================================
+Summary: TKV vs OjaKV Head-to-Head
+==================================================
+Saved benchmark_head_to_head.pdf
 
 All benchmarks complete.
