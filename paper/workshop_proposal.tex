@@ -66,9 +66,10 @@ underexplored ways.
 A critical gap is the absence of a venue where theoreticians who study
 low-rank matrix approximation, practitioners deploying at scale, and
 systems researchers building inference kernels can exchange ideas in real time.
-Recent arXiv activity (OjaKV, SVDq, xKV, KVTC, KQ-SVD, StreamingLLM, SnapKV,
-PyramidKV, MagicPIG) reflects a field that is generating results faster
-than the community can synthesize them.
+Recent arXiv activity (OjaKV~\cite{ojakov2025}, SVDq~\cite{svdq2025},
+xKV~\cite{xkv2025}, KVTC, KQ-SVD, StreamingLLM~\cite{streamingllm2023},
+SnapKV, PyramidKV, MagicPIG) reflects a field that is generating results
+faster than the community can synthesize them.
 
 \textbf{Why now?} Three developments make 2026 the right moment:
 (i) context windows of 128K--1M tokens are now standard in frontier models,
@@ -273,8 +274,9 @@ Accept/reject notification will be issued by \textbf{September 29, 2026} at the 
 David Aror is an independent researcher working on efficient inference for large
 language models, with a current focus on online KV cache compression.  His recent
 work introduces \textbf{TKV}, a streaming KV compression method that computes
-an EYM-optimal low-rank basis during prefill (via Brand's rank-1 SVD update and
-Halko randomized range finding) and freezes the basis for the autoregressive decode
+an EYM-optimal low-rank basis during prefill (via Brand's rank-1 SVD
+update~\cite{brand2006} and Halko randomized range finding~\cite{halko2011})
+and freezes the basis for the autoregressive decode
 phase---exploiting the structure of conditional generation to achieve $2.5$--$3.1\times$
 lower per-token latency than OjaKV with $2.7$--$4.4\times$ lower reconstruction error.
 He has experience running small research communities and organizing reading groups
